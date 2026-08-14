@@ -51,12 +51,37 @@ const OVERLAY_STREAM_WIDTH: f64 = 400.0;
 const OVERLAY_STREAM_HEIGHT: f64 = 120.0;
 
 /// Overlay window size (logical) for a given UI state.
-fn overlay_dimensions(state: &str) -> (f64, f64) {
+///
+/// On a notched display the window starts at the very top of the screen and so
+/// must also cover the camera housing: the card is drawn black from y=0 down,
+/// which is what makes it look like one object growing out of the notch rather
+/// than a pill parked underneath it. `notch_inset` is that extra height.
+fn overlay_dimensions(state: &str, notch_inset: f64) -> (f64, f64) {
     if state == "streaming" {
-        (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT)
+        (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT + notch_inset)
     } else {
-        (OVERLAY_WIDTH, OVERLAY_HEIGHT)
+        (OVERLAY_WIDTH, OVERLAY_HEIGHT + notch_inset)
     }
+}
+
+/// Height of the camera housing on the screen the cursor is on, or 0.
+#[cfg(target_os = "macos")]
+fn notch_inset(app_handle: &AppHandle) -> f64 {
+    get_monitor_with_cursor(app_handle)
+        .and_then(|monitor| {
+            let scale = monitor.scale_factor();
+            crate::notch::for_screen_size(
+                monitor.size().width as f64 / scale,
+                monitor.size().height as f64 / scale,
+            )
+        })
+        .map(|g| g.safe_area_top)
+        .unwrap_or(0.0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn notch_inset(_app_handle: &AppHandle) -> f64 {
+    0.0
 }
 
 static LAST_MIC_LEVEL_EMIT: AtomicU64 = AtomicU64::new(0);
@@ -270,16 +295,16 @@ fn calculate_overlay_position(
 
     let x = monitor_x + (monitor_width - width) / 2.0;
     let y = match settings.overlay_position {
-        // On a notched display the pill butts against the bottom edge of the
-        // camera housing so the two read as one object, instead of floating in
-        // the gap below the menu bar. Not y=0: the housing would occlude the
-        // top of the card. Screens with no notch — and any screen we never
-        // snapshotted — keep the original offset.
+        // On a notched display the window starts at the very top of the screen,
+        // so its black card covers the camera housing and the two become one
+        // shape. The card pads its content down past the housing rather than
+        // starting below it — that continuity is the whole Dynamic Island
+        // effect. Screens with no notch keep the original offset.
         #[cfg(target_os = "macos")]
         OverlayPosition::Top => {
             let monitor_height = monitor.size().height as f64 / scale;
             match crate::notch::for_screen_size(monitor_width, monitor_height) {
-                Some(geometry) => monitor_y + geometry.safe_area_top,
+                Some(_) => monitor_y,
                 None => monitor_y + OVERLAY_TOP_OFFSET,
             }
         }
@@ -516,7 +541,7 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
 
 fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
     // Size the overlay for this state (compact vs. streaming), then position it.
-    let (width, height) = overlay_dimensions(state);
+    let (width, height) = overlay_dimensions(state, notch_inset(app_handle));
     if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
         #[cfg(target_os = "linux")]
         let shown_with_layer_shell = if LAYER_SHELL_ACTIVE.load(Ordering::SeqCst) {
@@ -683,7 +708,7 @@ fn update_overlay_position_on_main(app_handle: &AppHandle) {
             } else {
                 "recording"
             };
-            let (width, height) = overlay_dimensions(state);
+            let (width, height) = overlay_dimensions(state, notch_inset(app_handle));
             if let Err(error) = place_windows_overlay(app_handle, &overlay_window, width, height) {
                 log::error!("Failed to update recording overlay position: {error}");
             }

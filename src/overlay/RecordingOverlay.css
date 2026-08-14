@@ -217,20 +217,49 @@
   width: var(--ov-work-w);
 }
 
-/* Notched displays (`data-notched`, set from NSScreen.safeAreaInsets — see
-   notch.rs). The window is positioned so the card's top edge meets the bottom
-   of the camera housing, so the top corners are squared and the card is at
-   least as wide as the cutout: the housing and the card then read as one
-   object rather than a rounded pill parked under a black notch.
-   --ov-cutout-w is the measured cutout width (186px on a 14" MacBook Pro). */
+/* ── Notched displays (`data-notched`, from NSScreen.safeAreaInsets — notch.rs)
+   The Dynamic Island illusion has three requirements, and missing any one of
+   them leaves you with a pill parked under a notch instead of a pill that IS
+   the notch:
+
+   1. The card starts at y=0 and covers the housing. The window is positioned
+      and sized for this (see overlay_dimensions); the card then pads its
+      content down past --ov-safe-top so nothing hides behind the camera.
+   2. The card is BLACK, not the themed app surface. The housing is physically
+      black, so only black merges with it — a light card in light mode reads as
+      a separate object no matter where it sits.
+   3. No border, no shadow along the top. A hairline across the housing draws
+      the seam you are trying to hide.
+
+   --ov-cutout-w / --ov-safe-top are measured per screen (186px / 32px on a 14"
+   MacBook Pro) and re-sent on every show, since the overlay follows the cursor
+   between displays. */
 :root[data-notched] .scard {
+  /* Merge with the housing. Deliberately not var(--s-surface). */
+  background: #000;
+  border: none;
+  box-shadow: none;
+  /* Square at the top (it is behind the housing), generously round at the
+     bottom — that asymmetry is the island silhouette. */
   border-top-left-radius: 0;
   border-top-right-radius: 0;
+  border-bottom-left-radius: 22px;
+  border-bottom-right-radius: 22px;
+  /* Grow downward out of the notch rather than outward from the middle. */
   transform-origin: top center;
+  /* Clear the camera housing. */
+  padding-top: var(--ov-safe-top, 0px);
 }
+
+/* Content sits on black now, whatever the system theme is doing. */
+:root[data-notched] .scard,
+:root[data-notched] .scard * {
+  color: #f5f5f5;
+}
+
 :root[data-notched] .scard.compact {
-  /* max(): never narrower than the cutout, or the housing would overhang the
-     card's shoulders and the seam would show. */
+  /* max(): never narrower than the cutout, or the housing overhangs the card's
+     shoulders and the seam shows. */
   width: max(var(--ov-rest-w), var(--ov-cutout-w, 0px));
 }
 :root[data-notched] .scard.compact.cworking {

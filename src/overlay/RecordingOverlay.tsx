@@ -109,9 +109,14 @@ const RecordingOverlay: React.FC = () => {
             "--ov-cutout-w",
             `${event.payload.cutoutWidth}px`,
           );
+          root.style.setProperty(
+            "--ov-safe-top",
+            `${event.payload.safeAreaTop}px`,
+          );
         } else {
           delete root.dataset.notched;
           root.style.removeProperty("--ov-cutout-w");
+          root.style.removeProperty("--ov-safe-top");
         }
       });
 
