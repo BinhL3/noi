@@ -94,6 +94,27 @@ const RecordingOverlay: React.FC = () => {
         setCaptureReady(false);
       });
 
+      // The overlay hangs off the camera housing on notched displays, so it
+      // squares its top corners to read as one object with it. Sent on every
+      // show: the overlay follows the cursor, and an external monitor has no
+      // notch even when the built-in display does.
+      const unlistenNotch = await listen<{
+        safeAreaTop: number;
+        cutoutWidth: number;
+      } | null>("notch-geometry", (event) => {
+        const root = document.documentElement;
+        if (event.payload) {
+          root.dataset.notched = "true";
+          root.style.setProperty(
+            "--ov-cutout-w",
+            `${event.payload.cutoutWidth}px`,
+          );
+        } else {
+          delete root.dataset.notched;
+          root.style.removeProperty("--ov-cutout-w");
+        }
+      });
+
       const unlistenReady = await listen("recording-ready", () => {
         setElapsed(0);
         setCaptureReady(true);
@@ -124,6 +145,7 @@ const RecordingOverlay: React.FC = () => {
       return () => {
         unlistenShow();
         unlistenHide();
+        unlistenNotch();
         unlistenReady();
         unlistenLevel();
         unlistenStream();

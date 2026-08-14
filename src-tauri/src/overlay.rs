@@ -270,15 +270,16 @@ fn calculate_overlay_position(
 
     let x = monitor_x + (monitor_width - width) / 2.0;
     let y = match settings.overlay_position {
-        // On a notched display the pill sits flush against the very top of the
-        // screen so it reads as part of the camera housing, rather than the
-        // usual gap that clears the menu bar. Screens with no notch — and any
-        // screen we never snapshotted — keep the original offset.
+        // On a notched display the pill butts against the bottom edge of the
+        // camera housing so the two read as one object, instead of floating in
+        // the gap below the menu bar. Not y=0: the housing would occlude the
+        // top of the card. Screens with no notch — and any screen we never
+        // snapshotted — keep the original offset.
         #[cfg(target_os = "macos")]
         OverlayPosition::Top => {
             let monitor_height = monitor.size().height as f64 / scale;
             match crate::notch::for_screen_size(monitor_width, monitor_height) {
-                Some(_) => monitor_y,
+                Some(geometry) => monitor_y + geometry.safe_area_top,
                 None => monitor_y + OVERLAY_TOP_OFFSET,
             }
         }
@@ -589,6 +590,29 @@ fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
                 set_pos_elapsed,
                 show_elapsed
             );
+        }
+
+        // Tell the overlay whether it is currently hanging off a notch, and how
+        // wide the cutout is, so it can square its top corners and read as one
+        // object with the housing. Sent on every show because the overlay
+        // follows the cursor between screens, and only one of them may have a
+        // notch.
+        #[cfg(target_os = "macos")]
+        {
+            let notch = get_monitor_with_cursor(app_handle).and_then(|monitor| {
+                let scale = monitor.scale_factor();
+                crate::notch::for_screen_size(
+                    monitor.size().width as f64 / scale,
+                    monitor.size().height as f64 / scale,
+                )
+            });
+            let payload = notch.map(|g| {
+                serde_json::json!({
+                    "safeAreaTop": g.safe_area_top,
+                    "cutoutWidth": g.cutout_width,
+                })
+            });
+            let _ = overlay_window.emit("notch-geometry", payload);
         }
 
         let _ = overlay_window.emit("show-overlay", state);

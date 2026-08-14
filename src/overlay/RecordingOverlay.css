@@ -217,6 +217,26 @@
   width: var(--ov-work-w);
 }
 
+/* Notched displays (`data-notched`, set from NSScreen.safeAreaInsets — see
+   notch.rs). The window is positioned so the card's top edge meets the bottom
+   of the camera housing, so the top corners are squared and the card is at
+   least as wide as the cutout: the housing and the card then read as one
+   object rather than a rounded pill parked under a black notch.
+   --ov-cutout-w is the measured cutout width (186px on a 14" MacBook Pro). */
+:root[data-notched] .scard {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  transform-origin: top center;
+}
+:root[data-notched] .scard.compact {
+  /* max(): never narrower than the cutout, or the housing would overhang the
+     card's shoulders and the seam would show. */
+  width: max(var(--ov-rest-w), var(--ov-cutout-w, 0px));
+}
+:root[data-notched] .scard.compact.cworking {
+  width: max(var(--ov-work-w), var(--ov-cutout-w, 0px));
+}
+
 /* text region — auto-height open via grid-rows trick; region fades as a whole */
 .stext {
   display: grid;
