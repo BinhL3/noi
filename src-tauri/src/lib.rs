@@ -17,6 +17,8 @@ mod overlay;
 mod paste_tx;
 pub mod portable;
 mod secure_input;
+#[cfg(target_os = "macos")]
+mod selection;
 mod settings;
 mod shortcut;
 mod signal_handle;
