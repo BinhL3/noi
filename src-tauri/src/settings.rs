@@ -686,6 +686,24 @@ fn default_post_process_providers() -> Vec<PostProcessProvider> {
         supports_structured_output: true,
     });
 
+    // Ollama, running locally. No API key: llm_client only sets the
+    // Authorization header when the key is non-empty. Structured output is
+    // supported — measured against Ollama 0.32.9, which honours
+    // `response_format: json_schema` on its OpenAI-compatible endpoint.
+    //
+    // Use a plain instruct model (qwen2.5:3b-instruct). Reasoning models are
+    // unusable for this: qwen3:4b took 7-11s to answer "Say OK." on an M1 Pro,
+    // and Ollama ignores both `chat_template_kwargs.enable_thinking` and
+    // `think: false`, so the reasoning cannot be switched off.
+    providers.push(PostProcessProvider {
+        id: "ollama".to_string(),
+        label: "Ollama (local)".to_string(),
+        base_url: "http://localhost:11434/v1".to_string(),
+        allow_base_url_edit: true,
+        models_endpoint: Some("/models".to_string()),
+        supports_structured_output: true,
+    });
+
     // Custom provider always comes last
     providers.push(PostProcessProvider {
         id: "custom".to_string(),
@@ -710,6 +728,12 @@ fn default_post_process_api_keys() -> SecretMap {
 fn default_model_for_provider(provider_id: &str) -> String {
     if provider_id == APPLE_INTELLIGENCE_PROVIDER_ID {
         return APPLE_INTELLIGENCE_DEFAULT_MODEL_ID.to_string();
+    }
+    // Ollama has no hosted default, and its /models list is whatever the user
+    // has pulled. Seed the one measured to be both faithful and fast enough
+    // (~500ms on short utterances, M1 Pro); the picker still lists the rest.
+    if provider_id == "ollama" {
+        return "qwen2.5:3b-instruct".to_string();
     }
     String::new()
 }
