@@ -526,7 +526,15 @@ fn default_selected_language() -> String {
 fn default_overlay_position() -> OverlayPosition {
     // Position only matters when the overlay is shown; whether it shows at all is
     // `overlay_style` (Linux defaults that to None). So a single default suffices.
-    OverlayPosition::Bottom
+    //
+    // macOS defaults to Top: on a notched display the overlay shapes itself to
+    // the camera housing (see notch.rs), and that is the point of this fork.
+    // Bottom is still one setting away, and non-notched Macs just get the usual
+    // top pill.
+    #[cfg(target_os = "macos")]
+    return OverlayPosition::Top;
+    #[cfg(not(target_os = "macos"))]
+    return OverlayPosition::Bottom;
 }
 
 fn default_overlay_style() -> OverlayStyle {
