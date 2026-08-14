@@ -30,7 +30,18 @@ private enum Island {
 private final class IslandView: NSView {
     let pill = CALayer()
     private let dot = CALayer()
-    private let bar = CALayer()
+    /// One layer per waveform bar. Levels arrive per audio callback and drive
+    /// each bar's scaleY from a bottom anchor — the familiar voice-memo look.
+    private var bars: [CALayer] = []
+    private enum Wave {
+        static let count = 7
+        static let barWidth: CGFloat = 3
+        static let gap: CGFloat = 4
+        static let maxHeight: CGFloat = 18
+        static var totalWidth: CGFloat {
+            CGFloat(count) * barWidth + CGFloat(count - 1) * gap
+        }
+    }
 
     private var cutoutWidth: CGFloat = 186
     private var safeAreaTop: CGFloat = 32
@@ -44,8 +55,11 @@ private final class IslandView: NSView {
         // colour reads as a separate object sitting under the notch.
         pill.backgroundColor = NSColor.black.cgColor
         pill.cornerRadius = Island.cornerRadius
-        // Only the bottom corners round; the top is behind the housing.
-        pill.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        // Only the BOTTOM corners round; the top is behind the housing and must
+        // stay square or the seam shows. AppKit's y axis points up, so the
+        // bottom corners are the MinY ones — the MaxY pair is the top, which is
+        // the opposite of what CSS or UIKit would suggest.
+        pill.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         pill.masksToBounds = true
         // Layer-backed and opaque: lets the compositor skip blending work.
         pill.isOpaque = true
@@ -56,10 +70,17 @@ private final class IslandView: NSView {
         dot.opacity = 0
         pill.addSublayer(dot)
 
-        bar.backgroundColor = NSColor.white.withAlphaComponent(0.85).cgColor
-        bar.cornerRadius = 1.5
-        bar.opacity = 0
-        pill.addSublayer(bar)
+        for _ in 0..<Wave.count {
+            let bar = CALayer()
+            bar.backgroundColor = NSColor.white.withAlphaComponent(0.85).cgColor
+            bar.cornerRadius = Wave.barWidth / 2
+            bar.opacity = 0
+            // Anchor at the bottom so scaleY grows the bar upward from its
+            // base, not outward from its middle.
+            bar.anchorPoint = CGPoint(x: 0.5, y: 0)
+            pill.addSublayer(bar)
+            bars.append(bar)
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -124,27 +145,47 @@ private final class IslandView: NSView {
         CATransaction.commit()
     }
 
-    /// Content lives strictly below the housing, or the camera covers it.
+    /// Content lives in the chin, strictly below the housing — which, in this
+    /// bottom-up coordinate space, is the LOWER part of the pill rect. The
+    /// housing occupies the top `safeAreaTop` points.
     private func layoutContents(in pillRect: CGRect, open: Bool) {
-        let chinTop = pillRect.height - safeAreaTop
-        let centerY = chinTop / 2
+        let chinHeight = pillRect.height - safeAreaTop
+        let centerY = chinHeight / 2
 
-        dot.frame = CGRect(x: 18, y: centerY - 3, width: 6, height: 6)
+        dot.frame = CGRect(x: 20, y: centerY - 3, width: 6, height: 6)
         dot.opacity = open ? 1 : 0
 
-        let barWidth = max(pillRect.width - 80, 20)
-        bar.frame = CGRect(x: 40, y: centerY - 1.5, width: barWidth, height: 3)
-        bar.opacity = open ? 1 : 0
+        let waveLeft = (pillRect.width - Wave.totalWidth) / 2
+        let baseY = centerY - Wave.maxHeight / 2
+        for (i, bar) in bars.enumerated() {
+            // frame-setting resets anchored position, so place via bounds+position.
+            bar.bounds = CGRect(x: 0, y: 0, width: Wave.barWidth, height: Wave.maxHeight)
+            bar.position = CGPoint(
+                x: waveLeft + CGFloat(i) * (Wave.barWidth + Wave.gap) + Wave.barWidth / 2,
+                y: baseY
+            )
+            if bar.transform.m22 == 0 {
+                bar.transform = CATransform3DMakeScale(1, 0.15, 1)
+            }
+            bar.opacity = open ? 1 : 0
+        }
     }
 
-    /// Mic level, 0...1. Scales the bar horizontally — a transform on an
-    /// existing layer, so it costs nothing per frame.
+    /// Mic level, 0...1. Each bar gets a slightly different response so the
+    /// row shimmers like the iOS voice indicator instead of moving as a block:
+    /// center bars follow the level fully, outer ones lag at a fraction of it.
+    /// scaleY on a bottom-anchored layer, so bars grow upward; the implicit
+    /// CALayer action gives each step a short eased animation for free.
     func setLevel(_ level: CGFloat) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        let clamped = max(0.04, min(level, 1))
-        bar.transform = CATransform3DMakeScale(clamped, 1, 1)
-        CATransaction.commit()
+        let clamped = max(0, min(level, 1))
+        let mid = CGFloat(Wave.count - 1) / 2
+        for (i, bar) in bars.enumerated() {
+            let distance = abs(CGFloat(i) - mid) / mid // 0 center, 1 edge
+            let response = 1.0 - distance * 0.55
+            let jitter = CGFloat.random(in: 0.85...1.15)
+            let scale = max(0.15, min(clamped * response * jitter, 1))
+            bar.transform = CATransform3DMakeScale(1, scale, 1)
+        }
     }
 }
 
