@@ -25,15 +25,50 @@ private enum Island {
     /// pushing outward from behind the housing rather than merely dropping down.
     static let openOverhang: CGFloat = 26
     static let cornerRadius: CGFloat = 22
+    /// The concave fillet where the island meets the top screen edge. This is
+    /// what makes it the Dynamic Island shape rather than a pill: the top
+    /// corners curve OUTWARD into the edge, like a trumpet bell, so the island
+    /// appears to grow out of the surface instead of being stuck onto it.
+    static let flare: CGFloat = 12
+}
+
+/// The island outline in layer coordinates (y-up, top edge at maxY).
+///
+/// Top corners are concave quadratic fillets flaring outward to the top edge;
+/// bottom corners are ordinary convex rounds. The body is inset by `flare` on
+/// each side so the flares stay inside the frame.
+private func islandPath(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat) -> CGPath {
+    let w = size.width
+    let h = size.height
+    let path = CGMutablePath()
+
+    // Top-left outer corner, on the screen edge.
+    path.move(to: CGPoint(x: 0, y: h))
+    // Concave fillet: curve from the edge down into the left wall at x = f.
+    path.addQuadCurve(to: CGPoint(x: f, y: h - f), control: CGPoint(x: f, y: h))
+    // Left wall.
+    path.addLine(to: CGPoint(x: f, y: r))
+    // Bottom-left round.
+    path.addQuadCurve(to: CGPoint(x: f + r, y: 0), control: CGPoint(x: f, y: 0))
+    // Bottom edge.
+    path.addLine(to: CGPoint(x: w - f - r, y: 0))
+    // Bottom-right round.
+    path.addQuadCurve(to: CGPoint(x: w - f, y: r), control: CGPoint(x: w - f, y: 0))
+    // Right wall.
+    path.addLine(to: CGPoint(x: w - f, y: h - f))
+    // Concave fillet back out to the edge.
+    path.addQuadCurve(to: CGPoint(x: w, y: h), control: CGPoint(x: w - f, y: h))
+    path.closeSubpath()
+    return path
 }
 
 private final class IslandView: NSView {
-    let pill = CALayer()
+    let pill = CAShapeLayer()
     /// Shadow lives under the pill on its own layer: the pill clips contents,
     /// so it would clip its own shadow.
     private let shadowLayer = CALayer()
     /// Hairline light along the pill's edge, drawn above the contents.
-    private let rim = CALayer()
+    private let rim = CAShapeLayer()
     private let dot = CALayer()
     /// One layer per waveform bar. Levels arrive per audio callback and drive
     /// each bar's scaleY from a bottom anchor — the familiar voice-memo look.
@@ -62,37 +97,27 @@ private final class IslandView: NSView {
         layer?.masksToBounds = false
 
         // Black, so it fuses with the physically black housing. Any other
-        // colour reads as a separate object sitting under the notch.
-        pill.backgroundColor = NSColor.black.cgColor
-        pill.cornerRadius = Island.cornerRadius
+        // colour reads as a separate object sitting under the notch. The shape
+        // comes entirely from the path (concave top flares), so no cornerRadius
+        // and no masksToBounds — a rect clip would slice the flares off.
+        pill.fillColor = NSColor.black.cgColor
+        pill.backgroundColor = NSColor.clear.cgColor
 
         // What sells "physical object" on Apple's own islands is not the shape
         // but the light: a soft drop shadow below (the pill floats above the
         // wallpaper) and a hairline rim catching light along the bottom edge.
         // The shadow lives on a dedicated layer UNDER the pill, because the
         // pill clips its contents and would clip its own shadow too.
-        shadowLayer.backgroundColor = NSColor.black.cgColor
-        shadowLayer.cornerRadius = Island.cornerRadius
-        shadowLayer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        shadowLayer.backgroundColor = NSColor.clear.cgColor
         shadowLayer.shadowColor = NSColor.black.cgColor
         shadowLayer.shadowOpacity = 0.45
         shadowLayer.shadowRadius = 14
         shadowLayer.shadowOffset = CGSize(width: 0, height: -6) // downward, y-up space
         layer?.addSublayer(shadowLayer)
 
-        rim.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
-        rim.borderWidth = 1
-        rim.cornerRadius = Island.cornerRadius
-        rim.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        rim.backgroundColor = NSColor.clear.cgColor
-        // Only the BOTTOM corners round; the top is behind the housing and must
-        // stay square or the seam shows. AppKit's y axis points up, so the
-        // bottom corners are the MinY ones — the MaxY pair is the top, which is
-        // the opposite of what CSS or UIKit would suggest.
-        pill.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        pill.masksToBounds = true
-        // Layer-backed and opaque: lets the compositor skip blending work.
-        pill.isOpaque = true
+        rim.strokeColor = NSColor.white.withAlphaComponent(0.09).cgColor
+        rim.lineWidth = 1
+        rim.fillColor = NSColor.clear.cgColor
         layer?.addSublayer(pill)
 
         dot.backgroundColor = NSColor.systemPink.cgColor
@@ -126,7 +151,10 @@ private final class IslandView: NSView {
 
     /// AppKit's y axis points up, so the pill hangs from the top of the view.
     private func pillFrame(open: Bool) -> CGRect {
-        let width = open ? cutoutWidth + Island.openOverhang * 2 : cutoutWidth
+        // The frame includes the flares; the body is inset by flare per side,
+        // so the visible body still covers the cutout exactly when closed.
+        let flares = Island.flare * 2
+        let width = (open ? cutoutWidth + Island.openOverhang * 2 : cutoutWidth) + flares
         let height = safeAreaTop + (open ? Island.chinHeight : Island.restHeight)
         return CGRect(
             x: (bounds.width - width) / 2,
@@ -143,7 +171,9 @@ private final class IslandView: NSView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             pill.frame = target
+            pill.path = islandPath(size: target.size, cornerRadius: Island.cornerRadius, flare: Island.flare)
             shadowLayer.frame = target
+            shadowLayer.shadowPath = pill.path
             layoutContents(in: target, open: open)
             CATransaction.commit()
             return
@@ -170,14 +200,28 @@ private final class IslandView: NSView {
         position.toValue = NSValue(point: CGPoint(x: target.midX, y: target.midY))
         position.duration = spring.duration
 
+        let targetPath = islandPath(size: target.size, cornerRadius: Island.cornerRadius, flare: Island.flare)
+        // The outline must morph on the same spring as the bounds, or the
+        // flares visibly detach from the corners mid-animation.
+        let pathSpring = CASpringAnimation(keyPath: "path")
+        pathSpring.mass = spring.mass
+        pathSpring.stiffness = spring.stiffness
+        pathSpring.damping = spring.damping
+        pathSpring.fromValue = pill.path
+        pathSpring.toValue = targetPath
+        pathSpring.duration = spring.duration
+
         CATransaction.begin()
         CATransaction.setAnimationDuration(spring.duration)
         pill.frame = target
+        pill.path = targetPath
         pill.add(spring, forKey: "bounds.size")
         pill.add(position, forKey: "position")
+        pill.add(pathSpring, forKey: "path")
         // The shadow is a sibling layer (the pill would clip its own shadow),
         // so it must ride the same spring or it visibly lags the pill.
         shadowLayer.frame = target
+        shadowLayer.shadowPath = targetPath
         shadowLayer.add(spring, forKey: "bounds.size")
         shadowLayer.add(position, forKey: "position")
         layoutContents(in: target, open: open)
@@ -192,9 +236,10 @@ private final class IslandView: NSView {
         let centerY = chinHeight / 2
 
         rim.frame = CGRect(origin: .zero, size: pillRect.size)
+        rim.path = islandPath(size: pillRect.size, cornerRadius: Island.cornerRadius, flare: Island.flare)
         rim.opacity = open ? 1 : 0
 
-        dot.frame = CGRect(x: 20, y: centerY - 3, width: 6, height: 6)
+        dot.frame = CGRect(x: Island.flare + 20, y: centerY - 3, width: 6, height: 6)
         dot.opacity = open ? 1 : 0
 
         let waveLeft = (pillRect.width - Wave.totalWidth) / 2
@@ -257,7 +302,10 @@ private final class IslandController {
 
     private func ensurePanel() -> (NSPanel, IslandView)? {
         if let panel, let view { return (panel, view) }
-        guard let screen = NSScreen.main,
+        // The notched screen, NOT NSScreen.main: main is the screen with
+        // keyboard focus, so with an external monitor attached the island
+        // would center itself on the wrong display.
+        guard let screen = NSScreen.screens.first(where: { notchMetrics(of: $0) != nil }),
               let metrics = notchMetrics(of: screen)
         else { return nil }
 
@@ -299,8 +347,7 @@ private final class IslandController {
     /// True only on displays with a camera housing; callers fall back to the
     /// webview overlay when this is false.
     func hasNotch() -> Bool {
-        guard let screen = NSScreen.main else { return false }
-        return notchMetrics(of: screen) != nil
+        NSScreen.screens.contains { notchMetrics(of: $0) != nil }
     }
 
     func show() {
