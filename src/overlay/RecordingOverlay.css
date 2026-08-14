@@ -266,6 +266,69 @@
   width: max(var(--ov-work-w), var(--ov-cutout-w, 0px));
 }
 
+/* Motion. The island should feel like a physical thing being pushed out of the
+   notch and pulled back in, which means two departures from the default card:
+
+   - A spring curve that overshoots slightly, instead of an ease that decelerates
+     into place. The overshoot is what reads as "physical".
+   - It grows out of the housing (scaleY from the top edge) rather than fading.
+     A fade says "a window appeared"; a stretch says "the notch opened".
+
+   Retract is quicker than expand and does not overshoot — bouncing on the way
+   out looks indecisive. */
+:root[data-notched] {
+  --ov-spring: cubic-bezier(0.22, 1.4, 0.36, 1);
+  --ov-spring-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:root[data-notched] .scard {
+  transition:
+    width 420ms var(--ov-spring),
+    height 420ms var(--ov-spring),
+    border-radius 420ms var(--ov-spring);
+  will-change: width, height, transform;
+}
+
+/* Replace the fade with a stretch out of the notch.
+   A keyframe animation, NOT a transition: the overlay unmounts when hidden and
+   mounts already carrying `.show`, so there is no starting frame for a
+   transition to run from and it would simply pop into place. Animations do run
+   on mount, which is the whole reason the default fade never appears either. */
+@keyframes island-open {
+  from {
+    transform: scaleY(0.2);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+:root[data-notched] .ov-fade {
+  opacity: 1;
+  transform-origin: top center;
+}
+:root[data-notched] .ov-fade.show {
+  animation: island-open 380ms var(--ov-spring) both;
+}
+
+/* The card's own pop-in would fight the stage stretch above: two animations
+   scaling the same pixels at different rates reads as a wobble. The stage owns
+   entry motion in notch mode; the card only morphs between states. */
+:root[data-notched] .scard {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-notched] .ov-fade.show {
+    animation-duration: 1ms;
+  }
+  :root[data-notched] .scard {
+    transition-duration: 1ms;
+  }
+}
+
 /* text region — auto-height open via grid-rows trick; region fades as a whole */
 .stext {
   display: grid;

@@ -57,6 +57,18 @@ const OVERLAY_STREAM_HEIGHT: f64 = 120.0;
 /// which is what makes it look like one object growing out of the notch rather
 /// than a pill parked underneath it. `notch_inset` is that extra height.
 fn overlay_dimensions(state: &str, notch_inset: f64) -> (f64, f64) {
+    // Notched: one fixed window at the largest footprint, for every state.
+    //
+    // Resizing the window per state is what makes the island feel janky —
+    // a native resize lands in one frame, and it clips any CSS transition
+    // trying to grow past the old bounds, so the card jumps instead of
+    // morphing. With a stable transparent window the card animates entirely
+    // in CSS and nothing clips it. The cost is a larger always-on panel,
+    // which is invisible and click-through anyway.
+    if notch_inset > 0.0 {
+        return (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT + notch_inset);
+    }
+
     if state == "streaming" {
         (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT + notch_inset)
     } else {
