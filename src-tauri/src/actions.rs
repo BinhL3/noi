@@ -421,6 +421,35 @@ const INSTRUCT_SELECTION_PROMPT: &str = "<text>\n${output}\n</text>\n\nThe user 
 static PENDING_SELECTION: Lazy<std::sync::Mutex<Option<String>>> =
     Lazy::new(|| std::sync::Mutex::new(None));
 
+/// The silent half of refine-on-selection: the user held the key, said nothing,
+/// and expects the selection cleaned up with their configured prompt.
+///
+/// This lives outside the normal transcription pipeline because that pipeline
+/// bails on empty audio long before post-processing runs.
+#[cfg(target_os = "macos")]
+async fn refine_selection_silently(app: &AppHandle) {
+    let Some(selection) = PENDING_SELECTION.lock().ok().and_then(|mut s| s.take()) else {
+        return;
+    };
+
+    debug!(
+        "Refine-on-selection: silent, cleaning up {} chars",
+        selection.len()
+    );
+    show_processing_overlay(app);
+
+    let settings = get_settings(app);
+    match post_process_transcription(&settings, &selection, None).await {
+        Some(refined) => match utils::paste(refined, app.clone()) {
+            Ok(()) => debug!("Refine-on-selection: pasted refined selection"),
+            Err(e) => error!("Refine-on-selection: paste failed: {e}"),
+        },
+        // Leave the user's text alone rather than pasting the selection back
+        // over itself: with nothing to change, doing nothing is the safe move.
+        None => warn!("Refine-on-selection: post-processing unavailable, leaving text untouched"),
+    }
+}
+
 pub(crate) struct ProcessedTranscription {
     pub final_text: String,
     pub post_processed_text: Option<String>,
@@ -537,6 +566,15 @@ impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
+
+        // Clear any selection left behind by an aborted gesture. Without this a
+        // cancelled refine would leave its selection in the slot and the next
+        // plain dictation would silently consume it, refining old text instead
+        // of inserting what was just said.
+        #[cfg(target_os = "macos")]
+        if let Ok(mut slot) = PENDING_SELECTION.lock() {
+            *slot = None;
+        }
 
         // Capture the selection before anything else: the moment we show an
         // overlay or the user moves on, the frontmost app may lose it.
@@ -795,6 +833,14 @@ impl ShortcutAction for TranscribeAction {
                     // Tear down any streaming worker so its channel doesn't leak
                     // and block the next start_stream.
                     tm.cancel_stream();
+
+                    // Silence is not a no-op for refine-on-selection — it IS the
+                    // default gesture: hold the key, say nothing, get the
+                    // selection cleaned up. Handy discards empty audio before
+                    // post-processing, so the refine has to happen here.
+                    #[cfg(target_os = "macos")]
+                    refine_selection_silently(&ah).await;
+
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                 } else {
