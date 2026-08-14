@@ -257,11 +257,11 @@
   color: #f5f5f5;
 }
 
-:root[data-notched] .scard.compact {
-  /* max(): never narrower than the cutout, or the housing overhangs the card's
-     shoulders and the seam shows. */
-  width: max(var(--ov-rest-w), var(--ov-cutout-w, 0px));
-}
+/* One width for every compact state — resting and working alike. The stock card
+   grows 172px -> 216px when it starts working, and animating that width is a
+   per-frame relayout. Holding it constant removes the reflow entirely; the
+   state change reads through the content instead. */
+:root[data-notched] .scard.compact,
 :root[data-notched] .scard.compact.cworking {
   width: max(var(--ov-work-w), var(--ov-cutout-w, 0px));
 }
@@ -281,12 +281,19 @@
   --ov-spring-out: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* Deliberately NOT animating width/height/border-radius.
+   Those are layout-and-paint properties: the engine recomputes geometry and
+   repaints the card on every frame, which is exactly the choppiness. Only
+   transform and opacity are handled by the compositor, so they are the only
+   things allowed to move here. The card holds ONE width in notch mode and the
+   content inside it crossfades — a constant pill with changing contents, which
+   is what the Dynamic Island actually does. */
 :root[data-notched] .scard {
-  transition:
-    width 420ms var(--ov-spring),
-    height 420ms var(--ov-spring),
-    border-radius 420ms var(--ov-spring);
-  will-change: width, height, transform;
+  transition: none;
+  will-change: transform, opacity;
+  /* Promote to its own compositor layer so the entry animation never triggers
+     a repaint of the card's contents. */
+  backface-visibility: hidden;
 }
 
 /* Replace the fade with a stretch out of the notch.
@@ -318,6 +325,18 @@
    entry motion in notch mode; the card only morphs between states. */
 :root[data-notched] .scard {
   animation: none !important;
+}
+
+/* The Live panel expands by animating grid-template-rows, which is another
+   per-frame relayout — and of the whole text region, so it is the most
+   expensive one here. In notch mode the region opens instantly and only its
+   opacity animates, which the compositor handles. */
+:root[data-notched] .stext {
+  transition: opacity 200ms ease;
+}
+:root[data-notched] .scard.open .stext,
+:root[data-notched] .scard .stext {
+  grid-template-rows: 1fr;
 }
 
 @media (prefers-reduced-motion: reduce) {
