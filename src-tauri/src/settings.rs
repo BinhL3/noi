@@ -605,7 +605,10 @@ fn default_show_tray_icon() -> bool {
 }
 
 fn default_post_process_provider_id() -> String {
-    "openai".to_string()
+    // Local by default, cloud opt-in: the refine pass runs offline with no API
+    // key and no per-user cost. Only takes effect once post-processing is
+    // enabled, and existing stores keep whatever they already selected.
+    "ollama".to_string()
 }
 
 fn default_post_process_providers() -> Vec<PostProcessProvider> {
