@@ -95,15 +95,22 @@ pub fn restore_clipboard(previous: Option<String>) {
     pasteboard.setString_forType(&value, &ns_type);
 }
 
+/// `kVK_ANSI_C`. A raw virtual keycode, NOT `Key::Unicode('c')`: the Unicode
+/// path makes enigo look the character up in the active keyboard layout via
+/// `TSMGetInputSourceProperty`, which asserts it is on the main thread and
+/// SIGTRAPs the process when called from the shortcut handler thread. Handy's
+/// own paste does the same thing with `Key::Other(9)` for V (see input.rs).
+const KEYCODE_C: u16 = 8;
+
 fn press_copy(enigo: &mut Enigo) -> Result<(), String> {
     enigo
         .key(Key::Meta, Direction::Press)
         .map_err(|e| e.to_string())?;
     enigo
-        .key(Key::Unicode('c'), Direction::Press)
+        .key(Key::Other(KEYCODE_C as u32), Direction::Press)
         .map_err(|e| e.to_string())?;
     enigo
-        .key(Key::Unicode('c'), Direction::Release)
+        .key(Key::Other(KEYCODE_C as u32), Direction::Release)
         .map_err(|e| e.to_string())?;
     enigo
         .key(Key::Meta, Direction::Release)
