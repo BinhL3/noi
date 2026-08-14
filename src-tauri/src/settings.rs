@@ -867,6 +867,23 @@ pub fn get_default_settings() -> AppSettings {
             current_binding: default_post_process_shortcut.to_string(),
         },
     );
+    // Refine whatever is selected on screen. Modifier-only by design: this is a
+    // one-key gesture, which the handy_keys backend supports (the Tauri backend
+    // does not — it requires a non-modifier key).
+    #[cfg(target_os = "macos")]
+    bindings.insert(
+        "refine_selection".to_string(),
+        ShortcutBinding {
+            id: "refine_selection".to_string(),
+            name: "Refine Selection".to_string(),
+            description:
+                "Refines the selected text. Stay silent to clean it up, or speak an instruction to apply it."
+                    .to_string(),
+            default_binding: "command_right".to_string(),
+            current_binding: "command_right".to_string(),
+        },
+    );
+
     bindings.insert(
         "cancel".to_string(),
         ShortcutBinding {

@@ -11,8 +11,8 @@
 //! advances when something was genuinely written. No advance means no
 //! selection, and the caller must not proceed.
 //!
-//! The previous clipboard contents are restored on the way out, so using this
-//! feature does not cost the user their clipboard.
+//! The user's previous clipboard is read and kept so it can be restored, but
+//! restoring is not wired up yet — see `restore_clipboard` for why.
 
 use enigo::{Direction, Enigo, Key, Keyboard};
 use log::{debug, warn};
@@ -28,7 +28,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub struct CapturedSelection {
     pub text: String,
     /// Whatever was on the pasteboard before we clobbered it, so the caller can
-    /// put it back once the replacement text has been pasted.
+    /// put it back once the replacement text has been pasted. See restore_clipboard.
+    #[allow(dead_code)]
     pub previous_clipboard: Option<String>,
 }
 
@@ -38,8 +39,9 @@ fn read_pasteboard_string(pasteboard: &NSPasteboard) -> Option<String> {
 }
 
 /// Copy the current selection and return it, or `None` when nothing is
-/// selected. `None` is a normal outcome, not an error — the caller should fall
-/// back to plain dictation rather than surfacing a failure.
+/// selected. `None` is a normal outcome, not an error — the caller aborts the
+/// gesture entirely rather than turning into plain dictation, so that this
+/// shortcut always means the same thing.
 pub fn capture_selection(enigo: &mut Enigo) -> Option<CapturedSelection> {
     let pasteboard = NSPasteboard::generalPasteboard();
     let before = pasteboard.changeCount();
@@ -74,6 +76,16 @@ pub fn capture_selection(enigo: &mut Enigo) -> Option<CapturedSelection> {
 }
 
 /// Put back whatever the user had on the clipboard before we borrowed it.
+///
+/// NOT wired up yet, deliberately. Handy's paste path (`paste_tx`) publishes the
+/// replacement text as a *lazy pasteboard promise* and watches `changeCount` to
+/// detect a newer user copy. Restoring the clipboard right after a paste would
+/// look exactly like that newer copy and could cancel the paste it is racing.
+/// Sequencing this correctly means hooking the point where `paste_tx` settles,
+/// which is more surgery than the feature needs on day one — and stock Handy
+/// already leaves the transcript on the clipboard, so this matches its
+/// behaviour rather than regressing it.
+#[allow(dead_code)]
 pub fn restore_clipboard(previous: Option<String>) {
     let Some(previous) = previous else { return };
     let pasteboard = NSPasteboard::generalPasteboard();
