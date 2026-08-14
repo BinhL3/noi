@@ -29,19 +29,29 @@ private enum Island {
 
 private final class IslandView: NSView {
     let pill = CALayer()
+    /// Shadow lives under the pill on its own layer: the pill clips contents,
+    /// so it would clip its own shadow.
+    private let shadowLayer = CALayer()
+    /// Hairline light along the pill's edge, drawn above the contents.
+    private let rim = CALayer()
     private let dot = CALayer()
     /// One layer per waveform bar. Levels arrive per audio callback and drive
     /// each bar's scaleY from a bottom anchor — the familiar voice-memo look.
     private var bars: [CALayer] = []
     private enum Wave {
-        static let count = 7
-        static let barWidth: CGFloat = 3
-        static let gap: CGFloat = 4
-        static let maxHeight: CGFloat = 18
+        static let count = 24
+        static let barWidth: CGFloat = 2.5
+        static let gap: CGFloat = 2.5
+        static let maxHeight: CGFloat = 16
         static var totalWidth: CGFloat {
             CGFloat(count) * barWidth + CGFloat(count - 1) * gap
         }
     }
+
+    /// Level history for the voice-memo waveform: newest sample on the right,
+    /// scrolling left as speech continues — the shape of what was just said,
+    /// not merely the current loudness.
+    private var levelHistory = [CGFloat](repeating: 0, count: Wave.count)
 
     private var cutoutWidth: CGFloat = 186
     private var safeAreaTop: CGFloat = 32
@@ -55,6 +65,26 @@ private final class IslandView: NSView {
         // colour reads as a separate object sitting under the notch.
         pill.backgroundColor = NSColor.black.cgColor
         pill.cornerRadius = Island.cornerRadius
+
+        // What sells "physical object" on Apple's own islands is not the shape
+        // but the light: a soft drop shadow below (the pill floats above the
+        // wallpaper) and a hairline rim catching light along the bottom edge.
+        // The shadow lives on a dedicated layer UNDER the pill, because the
+        // pill clips its contents and would clip its own shadow too.
+        shadowLayer.backgroundColor = NSColor.black.cgColor
+        shadowLayer.cornerRadius = Island.cornerRadius
+        shadowLayer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        shadowLayer.shadowColor = NSColor.black.cgColor
+        shadowLayer.shadowOpacity = 0.45
+        shadowLayer.shadowRadius = 14
+        shadowLayer.shadowOffset = CGSize(width: 0, height: -6) // downward, y-up space
+        layer?.addSublayer(shadowLayer)
+
+        rim.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
+        rim.borderWidth = 1
+        rim.cornerRadius = Island.cornerRadius
+        rim.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        rim.backgroundColor = NSColor.clear.cgColor
         // Only the BOTTOM corners round; the top is behind the housing and must
         // stay square or the seam shows. AppKit's y axis points up, so the
         // bottom corners are the MinY ones — the MaxY pair is the top, which is
@@ -81,6 +111,9 @@ private final class IslandView: NSView {
             pill.addSublayer(bar)
             bars.append(bar)
         }
+
+        // Above the contents so the hairline is never painted over.
+        pill.addSublayer(rim)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -110,6 +143,7 @@ private final class IslandView: NSView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             pill.frame = target
+            shadowLayer.frame = target
             layoutContents(in: target, open: open)
             CATransaction.commit()
             return
@@ -141,6 +175,11 @@ private final class IslandView: NSView {
         pill.frame = target
         pill.add(spring, forKey: "bounds.size")
         pill.add(position, forKey: "position")
+        // The shadow is a sibling layer (the pill would clip its own shadow),
+        // so it must ride the same spring or it visibly lags the pill.
+        shadowLayer.frame = target
+        shadowLayer.add(spring, forKey: "bounds.size")
+        shadowLayer.add(position, forKey: "position")
         layoutContents(in: target, open: open)
         CATransaction.commit()
     }
@@ -151,6 +190,9 @@ private final class IslandView: NSView {
     private func layoutContents(in pillRect: CGRect, open: Bool) {
         let chinHeight = pillRect.height - safeAreaTop
         let centerY = chinHeight / 2
+
+        rim.frame = CGRect(origin: .zero, size: pillRect.size)
+        rim.opacity = open ? 1 : 0
 
         dot.frame = CGRect(x: 20, y: centerY - 3, width: 6, height: 6)
         dot.opacity = open ? 1 : 0
@@ -171,21 +213,24 @@ private final class IslandView: NSView {
         }
     }
 
-    /// Mic level, 0...1. Each bar gets a slightly different response so the
-    /// row shimmers like the iOS voice indicator instead of moving as a block:
-    /// center bars follow the level fully, outer ones lag at a fraction of it.
-    /// scaleY on a bottom-anchored layer, so bars grow upward; the implicit
-    /// CALayer action gives each step a short eased animation for free.
+    /// Mic level, 0...1, at ~24 Hz. Voice-memo style: the new sample enters on
+    /// the right and history scrolls left, so the waveform is a picture of the
+    /// last second of speech. Each bar is a bottom-anchored scaleY transform;
+    /// the implicit CALayer action smooths each step for free, and the
+    /// transforms are all the compositor ever touches.
     func setLevel(_ level: CGFloat) {
-        let clamped = max(0, min(level, 1))
-        let mid = CGFloat(Wave.count - 1) / 2
+        levelHistory.removeFirst()
+        levelHistory.append(max(0, min(level, 1)))
+
         for (i, bar) in bars.enumerated() {
-            let distance = abs(CGFloat(i) - mid) / mid // 0 center, 1 edge
-            let response = 1.0 - distance * 0.55
-            let jitter = CGFloat.random(in: 0.85...1.15)
-            let scale = max(0.15, min(clamped * response * jitter, 1))
+            let scale = max(0.12, levelHistory[i])
             bar.transform = CATransform3DMakeScale(1, scale, 1)
         }
+    }
+
+    /// A fresh recording starts with a flat line, not the tail of the last one.
+    func resetWave() {
+        levelHistory = [CGFloat](repeating: 0, count: Wave.count)
     }
 }
 
@@ -260,6 +305,7 @@ private final class IslandController {
 
     func show() {
         guard let (panel, view) = ensurePanel() else { return }
+        view.resetWave()
         panel.orderFrontRegardless()
         view.layoutPill(open: true, animated: true)
     }
