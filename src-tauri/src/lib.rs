@@ -14,6 +14,8 @@ mod llm_client;
 mod managers;
 mod memory;
 #[cfg(target_os = "macos")]
+mod native_notch;
+#[cfg(target_os = "macos")]
 mod notch;
 mod overlay;
 mod paste_tx;

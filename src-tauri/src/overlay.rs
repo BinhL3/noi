@@ -538,6 +538,15 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
         return;
     }
 
+    // Native island: on a notched display with Top placement, the CALayer
+    // overlay replaces the webview one outright. It is the only version that
+    // animates on the GPU, and running both would show two overlays.
+    #[cfg(target_os = "macos")]
+    if settings.overlay_position == OverlayPosition::Top && crate::native_notch::is_available() {
+        crate::native_notch::show();
+        return;
+    }
+
     // The rest queries monitors and the cursor and mutates window geometry. On
     // Linux the monitor/cursor lookups hit GDK/Xlib on the process's shared X11
     // connection, which is only safe from the GTK main thread — running them on
@@ -742,6 +751,12 @@ fn update_overlay_position_on_main(app_handle: &AppHandle) {
 
 /// Hides the recording overlay window with fade-out animation
 pub fn hide_recording_overlay(app_handle: &AppHandle) {
+    // Unconditional: the setting may have been flipped mid-recording, and the
+    // native island must never be left open because the user switched
+    // placement while it was showing.
+    #[cfg(target_os = "macos")]
+    crate::native_notch::hide();
+
     // Always hide the overlay regardless of settings - if setting was changed while recording,
     // we still want to hide it properly
     if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
@@ -810,6 +825,15 @@ pub fn emit_levels(app_handle: &AppHandle, levels: &[f32]) {
     // `emit_to` with the overlay's window label produces a single
     // eval_script call per callback, cutting the per-callback WebKit
     // dispatch work in half.
+    // The native island takes the level directly as a layer transform — no
+    // eval_script, no DOM, so it is far cheaper than the webview path it
+    // replaces at ~24 Hz.
+    #[cfg(target_os = "macos")]
+    if crate::native_notch::is_available() {
+        let peak = levels.iter().copied().fold(0.0_f32, f32::max);
+        crate::native_notch::set_level(peak);
+    }
+
     let _ = app_handle.emit_to("recording_overlay", "mic-level", levels);
 }
 

@@ -2,6 +2,9 @@ fn main() {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     build_apple_intelligence_bridge();
 
+    #[cfg(target_os = "macos")]
+    build_notch_overlay_bridge();
+
     generate_tray_translations();
 
     // Linux ships transcribe-cpp as a shared libtranscribe + loadable ggml
@@ -381,6 +384,94 @@ fn escape_string(s: &str) -> String {
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+/// Compiles the native notch overlay (swift/notch_overlay.swift).
+///
+/// Unlike the Apple Intelligence bridge there is no stub fallback and no full
+/// Xcode requirement: this needs only AppKit and QuartzCore, both of which ship
+/// in the Command Line Tools SDK. It was FoundationModels' macro plugin that
+/// needed Xcode, not Swift itself.
+#[cfg(target_os = "macos")]
+fn build_notch_overlay_bridge() {
+    use std::path::Path;
+    use std::process::Command;
+    use std::{env, fs};
+
+    const SWIFT_FILE: &str = "swift/notch_overlay.swift";
+    const BRIDGE_HEADER: &str = "swift/notch_overlay_bridge.h";
+
+    println!("cargo:rerun-if-changed={SWIFT_FILE}");
+    println!("cargo:rerun-if-changed={BRIDGE_HEADER}");
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR is not set");
+    let out_dir = Path::new(&out_dir);
+    let object_path = out_dir.join("notch_overlay.o");
+    let static_lib_path = out_dir.join("libnotch_overlay.a");
+
+    let sdk_path = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--show-sdk-path"])
+            .output()
+            .expect("Failed to locate the macOS SDK")
+            .stdout,
+    )
+    .expect("SDK path is not valid UTF-8");
+    let sdk_path = sdk_path.trim().to_string();
+
+    let swiftc_path = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--find", "swiftc"])
+            .output()
+            .expect("Failed to locate swiftc")
+            .stdout,
+    )
+    .expect("swiftc path is not valid UTF-8");
+    let swiftc_path = swiftc_path.trim().to_string();
+
+    let arch = if env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64") {
+        "x86_64"
+    } else {
+        "arm64"
+    };
+
+    let status = Command::new(&swiftc_path)
+        .args([
+            // See the Apple Intelligence bridge: without this, single-file
+            // input is treated as a script and emits its own _main.
+            "-parse-as-library",
+            "-target",
+            &format!("{arch}-apple-macosx11.0"),
+            "-sdk",
+            &sdk_path,
+            "-O",
+            "-import-objc-header",
+            BRIDGE_HEADER,
+            "-c",
+            SWIFT_FILE,
+            "-o",
+            object_path.to_str().expect("object path is not UTF-8"),
+        ])
+        .status()
+        .expect("Failed to invoke swiftc for the notch overlay");
+    assert!(status.success(), "swiftc failed to compile {SWIFT_FILE}");
+
+    let _ = fs::remove_file(&static_lib_path);
+    let status = Command::new("libtool")
+        .args([
+            "-static",
+            "-o",
+            static_lib_path.to_str().expect("lib path is not UTF-8"),
+            object_path.to_str().expect("object path is not UTF-8"),
+        ])
+        .status()
+        .expect("Failed to create the notch overlay static library");
+    assert!(status.success(), "libtool failed for the notch overlay");
+
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=notch_overlay");
+    println!("cargo:rustc-link-lib=framework=AppKit");
+    println!("cargo:rustc-link-lib=framework=QuartzCore");
+}
+
 fn build_apple_intelligence_bridge() {
     use std::env;
     use std::path::{Path, PathBuf};
