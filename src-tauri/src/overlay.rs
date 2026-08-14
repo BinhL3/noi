@@ -270,6 +270,19 @@ fn calculate_overlay_position(
 
     let x = monitor_x + (monitor_width - width) / 2.0;
     let y = match settings.overlay_position {
+        // On a notched display the pill sits flush against the very top of the
+        // screen so it reads as part of the camera housing, rather than the
+        // usual gap that clears the menu bar. Screens with no notch — and any
+        // screen we never snapshotted — keep the original offset.
+        #[cfg(target_os = "macos")]
+        OverlayPosition::Top => {
+            let monitor_height = monitor.size().height as f64 / scale;
+            match crate::notch::for_screen_size(monitor_width, monitor_height) {
+                Some(_) => monitor_y,
+                None => monitor_y + OVERLAY_TOP_OFFSET,
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
         OverlayPosition::Top => monitor_y + OVERLAY_TOP_OFFSET,
         OverlayPosition::Bottom => {
             // work_area.position shares monitor.position's global coordinate

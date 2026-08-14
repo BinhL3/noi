@@ -13,6 +13,8 @@ mod input;
 mod llm_client;
 mod managers;
 mod memory;
+#[cfg(target_os = "macos")]
+mod notch;
 mod overlay;
 mod paste_tx;
 pub mod portable;
@@ -832,6 +834,13 @@ pub fn run(cli_args: CliArgs) {
         .manage(cli_args.clone())
         .setup(move |app| {
             specta_builder.mount_events(app);
+
+            // Snapshot notch geometry while we are still on the main thread —
+            // NSScreen requires it, and overlay positioning later runs off it.
+            #[cfg(target_os = "macos")]
+            if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+                notch::snapshot_screens(mtm);
+            }
 
             // Headless one-shot path (`--transcribe-file` / `--list-devices` /
             // `--list-models`): initialize only what transcription needs — the
