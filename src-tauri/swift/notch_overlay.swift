@@ -130,18 +130,32 @@ private final class IslandView: NSView {
     /// Everything in the chin. Fades and scales in from the top edge as one
     /// unit, so content is revealed by the island opening rather than popping.
     private let content = CALayer()
-    private let dot = CALayer()
     /// One layer per waveform bar. Levels arrive per audio callback and drive
-    /// each bar's scaleY from a bottom anchor — the familiar voice-memo look.
+    /// each bar's scaleY about its CENTRE, so a bar grows up and down at
+    /// once — Voice Memos and the iOS island both mirror the wave around a
+    /// midline; a bottom-anchored bar reads as an equaliser, not a voice.
     private var bars: [CALayer] = []
+    /// Elapsed time, right of the wave, as Voice Memos pairs them. Digits
+    /// are monospaced so the label doesn't jitter as they tick.
+    private let timer = CATextLayer()
+    private var timerTick: Timer?
+    private var recordingStart: Date?
     private enum Wave {
-        static let count = 24
+        static let count = 22
         static let barWidth: CGFloat = 2.5
         static let gap: CGFloat = 2.5
-        static let maxHeight: CGFloat = 16
+        static let maxHeight: CGFloat = 20
+        /// Silence is a row of dots, not nothing.
+        static let minScale: CGFloat = 0.12
         static var totalWidth: CGFloat {
             CGFloat(count) * barWidth + CGFloat(count - 1) * gap
         }
+        /// Voice Memos red. White bars read as a generic meter.
+        static let tint = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
+    }
+    private enum Text {
+        static let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        static let width: CGFloat = 40
     }
 
     /// Level history for the voice-memo waveform: newest sample on the right,
@@ -188,20 +202,23 @@ private final class IslandView: NSView {
         content.opacity = 0
         pill.addSublayer(content)
 
-        dot.backgroundColor = NSColor.systemPink.cgColor
-        dot.cornerRadius = 3
-        content.addSublayer(dot)
-
         for _ in 0..<Wave.count {
             let bar = CALayer()
-            bar.backgroundColor = NSColor.white.withAlphaComponent(0.85).cgColor
+            bar.backgroundColor = Wave.tint.cgColor
             bar.cornerRadius = Wave.barWidth / 2
-            // Anchor at the bottom so scaleY grows the bar upward from its
-            // base, not outward from its middle.
-            bar.anchorPoint = CGPoint(x: 0.5, y: 0)
+            bar.transform = CATransform3DMakeScale(1, Wave.minScale, 1)
             content.addSublayer(bar)
             bars.append(bar)
         }
+
+        timer.string = "0:00"
+        timer.font = Text.font
+        timer.fontSize = Text.font.pointSize
+        timer.foregroundColor = Wave.tint.cgColor
+        timer.alignmentMode = .right
+        timer.truncationMode = .none
+        timer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        content.addSublayer(timer)
 
         // Above the contents so the hairline is never painted over.
         pill.addSublayer(rim)
@@ -240,6 +257,7 @@ private final class IslandView: NSView {
 
     func layoutPill(_ s: IslandState, animated: Bool) {
         let growing = Island.chinHeight(s) > Island.chinHeight(state)
+        let leavingOpen = state == .open && s != .open
         state = s
         let target = pillFrame(s)
         let targetPath = path(for: target.size, s)
@@ -280,6 +298,15 @@ private final class IslandView: NSView {
         shadowSpring.fromValue = shadowLayer.shadowPath
         shadowSpring.toValue = targetPath
 
+        // Leaving the open state: content melts first, then the container
+        // follows. Shrinking everything at once is what reads as "sudden" —
+        // Apple's islands always retire the content a beat before the shape.
+        let contentLead: CFTimeInterval = leavingOpen ? 0.1 : 0
+        for anim in [size, position, pathSpring, shadowSpring] {
+            anim.beginTime = CACurrentMediaTime() + contentLead
+            anim.fillMode = .backwards
+        }
+
         CATransaction.begin()
         CATransaction.setAnimationDuration(duration)
         pill.frame = target
@@ -316,45 +343,93 @@ private final class IslandView: NSView {
         let chinSize = CGSize(width: pillRect.width, height: max(chinHeight, Island.chinHeight(.open)))
         content.bounds = CGRect(origin: .zero, size: chinSize)
         content.position = CGPoint(x: pillRect.width / 2, y: chinHeight)
-        content.opacity = open ? 1 : 0
-        content.transform = open ? CATransform3DIdentity : CATransform3DMakeScale(1, 0.6, 1)
 
+        // Content in: rides the container's spring. Content out: quick and
+        // eased, ahead of the container (see layoutPill).
+        if open {
+            content.opacity = 1
+            content.transform = CATransform3DIdentity
+        } else {
+            let out = CATransaction.animationDuration() > 0 ? 0.2 : 0
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(out)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeIn))
+            content.opacity = 0
+            content.transform = CATransform3DMakeScale(1, 0.6, 1)
+            // Bars fall back to the midline as they fade, so the wave dies
+            // rather than being cut off mid-word.
+            for bar in bars {
+                bar.transform = CATransform3DMakeScale(1, Wave.minScale, 1)
+            }
+            CATransaction.commit()
+        }
+
+        // Wave on the left, time on the right, both inset from the wall by
+        // the open flare plus a margin (the reference apps' 19 + 12).
+        let inset = Island.flare(.open) + 12
         let midY = chinSize.height / 2
-        dot.frame = CGRect(x: Island.flare(.open) + 20, y: midY - 3, width: 6, height: 6)
-
-        let waveLeft = (chinSize.width - Wave.totalWidth) / 2
-        let baseY = midY - Wave.maxHeight / 2
+        let waveLeft = inset
         for (i, bar) in bars.enumerated() {
             // frame-setting resets anchored position, so place via bounds+position.
             bar.bounds = CGRect(x: 0, y: 0, width: Wave.barWidth, height: Wave.maxHeight)
             bar.position = CGPoint(
                 x: waveLeft + CGFloat(i) * (Wave.barWidth + Wave.gap) + Wave.barWidth / 2,
-                y: baseY
+                y: midY
             )
-            if bar.transform.m22 == 0 {
-                bar.transform = CATransform3DMakeScale(1, 0.15, 1)
-            }
         }
+
+        let textHeight = ceil(Text.font.ascender - Text.font.descender)
+        timer.frame = CGRect(
+            x: chinSize.width - inset - Text.width,
+            y: midY - textHeight / 2 - 1,
+            width: Text.width,
+            height: textHeight
+        )
     }
 
     /// Mic level, 0...1, at ~24 Hz. Voice-memo style: the new sample enters on
     /// the right and history scrolls left, so the waveform is a picture of the
-    /// last second of speech. Each bar is a bottom-anchored scaleY transform;
+    /// last second of speech. Each bar is a centre-anchored scaleY transform;
     /// the implicit CALayer action smooths each step for free, and the
     /// transforms are all the compositor ever touches.
     func setLevel(_ level: CGFloat) {
+        guard state == .open else { return }
         levelHistory.removeFirst()
         levelHistory.append(max(0, min(level, 1)))
 
         for (i, bar) in bars.enumerated() {
-            let scale = max(0.12, levelHistory[i])
+            let scale = max(Wave.minScale, levelHistory[i])
             bar.transform = CATransform3DMakeScale(1, scale, 1)
         }
     }
 
-    /// A fresh recording starts with a flat line, not the tail of the last one.
-    func resetWave() {
+    /// A fresh recording starts with a flat line and 0:00, not the tail of
+    /// the last one.
+    func startRecording() {
         levelHistory = [CGFloat](repeating: 0, count: Wave.count)
+        recordingStart = Date()
+        updateTimer()
+        timerTick?.invalidate()
+        timerTick = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.updateTimer()
+        }
+    }
+
+    func stopRecording() {
+        timerTick?.invalidate()
+        timerTick = nil
+        recordingStart = nil
+    }
+
+    private func updateTimer() {
+        guard let start = recordingStart else { return }
+        let elapsed = Int(Date().timeIntervalSince(start))
+        let text = String(format: "%d:%02d", elapsed / 60, elapsed % 60)
+        // Text changes must not cross-fade; a ticking clock should just tick.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        timer.string = text
+        CATransaction.commit()
     }
 }
 
@@ -501,13 +576,14 @@ private final class IslandController {
         recording = true
         pendingPeek?.cancel()
         pendingUnpeek?.cancel()
-        view.resetWave()
+        view.startRecording()
         view.layoutPill(.open, animated: true)
     }
 
     func hide() {
         guard let view else { return }
         recording = false
+        view.stopRecording()
         // The panel stays resident (hover needs it); only the pill collapses.
         // If the pointer is already resting on it, settle into the peek
         // rather than snapping shut under the cursor.
