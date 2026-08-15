@@ -515,8 +515,8 @@
         "description": "Microphone to use when laptop lid is closed"
       },
       "postProcessingToggle": {
-        "label": "Post Processing",
-        "description": "Enable AI-powered text refinement after transcription"
+        "label": "Refine",
+        "description": "Clean up text with your model. Select text and tap the refine key; tap-and-hold to speak an instruction. Dictation itself is never refined."
       },
       "muteWhileRecording": {
         "label": "Mute While Recording",
