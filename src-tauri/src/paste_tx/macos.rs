@@ -158,12 +158,19 @@ fn settle(
         !ownership_lost && NSPasteboard::generalPasteboard().changeCount() == p.change_count;
     if !still_ours {
         info!("[reliable-paste] clipboard changed externally; leaving it untouched");
-    } else if p.preserve_transcript {
-        // The user asked for the transcript to stay on the clipboard: replace
-        // the concealed promise with plain text so clipboard managers record
-        // it and it survives this app exiting.
+    } else if p.preserve_transcript || !receipt_seen {
+        // Two reasons to leave the transcript rather than restore. Either the
+        // user asked for it to stay, or nothing ever read it — no text field
+        // had focus, so the paste went nowhere. Restoring in that second case
+        // silently discards what was just dictated; leaving it means a manual
+        // Cmd+V still lands it. Replace the concealed promise with plain text
+        // so clipboard managers record it and it survives this app exiting.
         let _ = app_handle.clipboard().write_text(&p.transcript);
-        info!("[reliable-paste] left transcript on clipboard as plain text");
+        if receipt_seen {
+            info!("[reliable-paste] left transcript on clipboard as plain text");
+        } else {
+            info!("[reliable-paste] nothing read the paste; left transcript on clipboard");
+        }
     } else {
         let clipboard = app_handle.clipboard();
         if let Some(text) = &p.saved_text {
