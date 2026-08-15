@@ -14,6 +14,7 @@ use std::sync::OnceLock;
 
 unsafe extern "C" {
     fn notch_overlay_available() -> i32;
+    fn notch_overlay_prepare();
     fn notch_overlay_show();
     fn notch_overlay_hide();
     fn notch_overlay_set_level(level: f32);
@@ -28,6 +29,15 @@ pub fn is_available() -> bool {
         debug!("[native-notch] available={available}");
         available
     })
+}
+
+/// Put the island on screen at rest so hover-to-peek works before the first
+/// recording. Cheap and idempotent.
+pub fn prepare() {
+    if !is_available() {
+        return;
+    }
+    unsafe { notch_overlay_prepare() }
 }
 
 pub fn show() {

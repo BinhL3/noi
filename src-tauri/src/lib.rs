@@ -944,6 +944,16 @@ pub fn run(cli_args: CliArgs) {
                 settings.overlay_style != settings::OverlayStyle::None,
             );
 
+            // The native island sits at rest over the housing and answers
+            // hover, so it should be resident from launch, not from the
+            // first recording.
+            #[cfg(target_os = "macos")]
+            if settings.overlay_style != settings::OverlayStyle::None
+                && settings.overlay_position == settings::OverlayPosition::Top
+            {
+                native_notch::prepare();
+            }
+
             // Pre-warm GPU/accelerator enumeration on a background thread. The first
             // get_available_accelerators call enumerates ORT execution providers and
             // transcribe-cpp compute devices, which can take a moment; without this

@@ -16,38 +16,64 @@ import QuartzCore
 
 // MARK: - Geometry
 
+/// The island has three sizes. `closed` is the housing itself, invisible at
+/// rest. `peek` is the hover acknowledgement — a small lift that says "I'm
+/// here" without opening — and `open` is recording, with the chin content.
+enum IslandState {
+    case closed, peek, open
+}
+
 /// Numbers come from docs/research/notch-ui-design.md §5: they are what
 /// boring.notch and DynamicNotchKit ship, checked against Apple's HIG.
 private enum Island {
-    /// Collapsed: exactly the camera housing, so the pill is invisible at rest.
-    static let restHeight: CGFloat = 0
-    /// Expanded: housing plus a chin below it for content.
-    static let chinHeight: CGFloat = 44
-    /// Collapsed body is a hair wider than the cutout so the anti-aliased seam
-    /// where the bezel meets the pixels never shows a light gap.
-    static let closedSlop: CGFloat = 4
-    /// Grown wider than the cutout when open, so the island reads as pushing
-    /// outward from behind the housing rather than merely dropping down.
-    static let openOverhang: CGFloat = 36
-
+    /// Chin below the housing, per state. Closed is exactly the housing so
+    /// the pill is invisible at rest.
+    static func chinHeight(_ s: IslandState) -> CGFloat {
+        switch s { case .closed: 0; case .peek: 6; case .open: 44 }
+    }
+    /// How far the body extends past the cutout on each side. Closed carries
+    /// a hair of slop so the anti-aliased seam where bezel meets pixels never
+    /// shows a light gap; open grows well outward so the island reads as
+    /// pushing out from behind the housing rather than merely dropping down.
+    static func overhang(_ s: IslandState) -> CGFloat {
+        switch s { case .closed: 2; case .peek: 8; case .open: 36 }
+    }
     /// The concave fillet where the island meets the top screen edge. This is
     /// what makes it the Dynamic Island shape rather than a pill: the top
     /// corners curve OUTWARD into the edge, like a trumpet bell, so the island
     /// appears to grow out of the surface instead of being stuck onto it.
     /// Both radii grow with the island — a constant radius makes the closed
     /// state look puffy and the open state look boxy.
-    static func flare(open: Bool) -> CGFloat { open ? 18 : 6 }
+    static func flare(_ s: IslandState) -> CGFloat {
+        switch s { case .closed: 6; case .peek: 9; case .open: 18 }
+    }
     /// Bottom corner radius. Open = flare + 5, the ratio the reference apps use.
-    static func cornerRadius(open: Bool) -> CGFloat { open ? 23 : 14 }
+    static func cornerRadius(_ s: IslandState) -> CGFloat {
+        switch s { case .closed: 14; case .peek: 16; case .open: 23 }
+    }
+    /// Shadow only once lifted: at rest the island must read as hardware, and
+    /// hardware does not cast a shadow onto the wallpaper.
+    static func shadowOpacity(_ s: IslandState) -> Float {
+        switch s { case .closed: 0; case .peek: 0.35; case .open: 0.6 }
+    }
 
     /// Springs as Apple specifies them (WWDC23 "Animate with springs"):
     /// perceptual duration + bounce, converted to CA's mass/stiffness/damping.
-    /// Opening carries a small bounce so it reads as physical; closing is
+    /// Growing carries a small bounce so it reads as physical; shrinking is
     /// critically damped because springing back shut looks indecisive.
-    static let openDuration: CFTimeInterval = 0.42
-    static let openBounce: CGFloat = 0.22
-    static let closeDuration: CFTimeInterval = 0.42
-    static let closeBounce: CGFloat = 0
+    static let growDuration: CFTimeInterval = 0.42
+    static let growBounce: CGFloat = 0.22
+    static let shrinkDuration: CFTimeInterval = 0.42
+    static let shrinkBounce: CGFloat = 0
+
+    /// Hover: dwell before the peek, grace after the pointer leaves, and how
+    /// far outside the pill still counts as "on it" (larger once lifted so a
+    /// pointer drifting along the edge doesn't flicker it).
+    static let hoverDwell: TimeInterval = 0.3
+    static let hoverExitGrace: TimeInterval = 0.1
+    static func hoverSlop(_ s: IslandState) -> CGFloat {
+        switch s { case .closed: 10; case .peek, .open: 30 }
+    }
 }
 
 /// stiffness = (2π/d)², damping = 4π(1−bounce)/d, mass 1 — Apple's formulas.
@@ -125,6 +151,7 @@ private final class IslandView: NSView {
 
     private var cutoutWidth: CGFloat = 186
     private var safeAreaTop: CGFloat = 32
+    private(set) var state: IslandState = .closed
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -185,17 +212,15 @@ private final class IslandView: NSView {
     func configure(cutoutWidth: CGFloat, safeAreaTop: CGFloat) {
         self.cutoutWidth = cutoutWidth
         self.safeAreaTop = safeAreaTop
-        layoutPill(open: false, animated: false)
+        layoutPill(.closed, animated: false)
     }
 
     /// AppKit's y axis points up, so the pill hangs from the top of the view.
-    private func pillFrame(open: Bool) -> CGRect {
+    private func pillFrame(_ s: IslandState) -> CGRect {
         // The frame includes the flares; the body is inset by flare per side,
         // so the visible body still covers the cutout (plus slop) when closed.
-        let flares = Island.flare(open: open) * 2
-        let body = open ? cutoutWidth + Island.openOverhang * 2 : cutoutWidth + Island.closedSlop
-        let width = body + flares
-        let height = safeAreaTop + (open ? Island.chinHeight : Island.restHeight)
+        let width = cutoutWidth + (Island.overhang(s) + Island.flare(s)) * 2
+        let height = safeAreaTop + Island.chinHeight(s)
         return CGRect(
             x: (bounds.width - width) / 2,
             y: bounds.height - height,
@@ -204,14 +229,21 @@ private final class IslandView: NSView {
         )
     }
 
-    private func path(for size: CGSize, open: Bool) -> CGPath {
-        islandPath(size: size, cornerRadius: Island.cornerRadius(open: open), flare: Island.flare(open: open))
+    private func path(for size: CGSize, _ s: IslandState) -> CGPath {
+        islandPath(size: size, cornerRadius: Island.cornerRadius(s), flare: Island.flare(s))
     }
 
-    func layoutPill(open: Bool, animated: Bool) {
-        let target = pillFrame(open: open)
-        let targetPath = path(for: target.size, open: open)
-        let shadowOpacity: Float = open ? 0.6 : 0
+    /// The pill's current footprint plus hover slop, in view coordinates.
+    var hoverRect: CGRect {
+        pillFrame(state).insetBy(dx: -Island.hoverSlop(state), dy: -Island.hoverSlop(state))
+    }
+
+    func layoutPill(_ s: IslandState, animated: Bool) {
+        let growing = Island.chinHeight(s) > Island.chinHeight(state)
+        state = s
+        let target = pillFrame(s)
+        let targetPath = path(for: target.size, s)
+        let shadowOpacity = Island.shadowOpacity(s)
 
         guard animated else {
             CATransaction.begin()
@@ -221,13 +253,13 @@ private final class IslandView: NSView {
             shadowLayer.frame = target
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
-            layoutContents(in: target, open: open)
+            layoutContents(in: target, s)
             CATransaction.commit()
             return
         }
 
-        let duration = open ? Island.openDuration : Island.closeDuration
-        let bounce = open ? Island.openBounce : Island.closeBounce
+        let duration = growing ? Island.growDuration : Island.shrinkDuration
+        let bounce = growing ? Island.growBounce : Island.shrinkBounce
 
         // Bounds, position and path must ride the identical spring, or the
         // flares visibly detach from the corners mid-animation and the shadow
@@ -262,33 +294,33 @@ private final class IslandView: NSView {
         shadowLayer.add(size, forKey: "bounds.size")
         shadowLayer.add(position, forKey: "position")
         shadowLayer.add(shadowSpring, forKey: "shadowPath")
-        layoutContents(in: target, open: open)
+        layoutContents(in: target, s)
         CATransaction.commit()
     }
 
     /// Content lives in the chin, strictly below the housing — which, in this
     /// bottom-up coordinate space, is the LOWER part of the pill rect. The
     /// housing occupies the top `safeAreaTop` points.
-    private func layoutContents(in pillRect: CGRect, open: Bool) {
+    private func layoutContents(in pillRect: CGRect, _ s: IslandState) {
+        let open = s == .open
         let chinHeight = pillRect.height - safeAreaTop
-        let centerY = chinHeight / 2
 
         rim.frame = CGRect(origin: .zero, size: pillRect.size)
-        rim.path = path(for: pillRect.size, open: open)
-        rim.opacity = open ? 1 : 0
+        rim.path = path(for: pillRect.size, s)
+        rim.opacity = s == .closed ? 0 : 1
 
         // The chin, as a layer anchored to the housing's bottom edge. When
         // closed the chin has no height, so we keep the open size and let
         // opacity + scale do the hiding — a zero-size layer would make the
         // reveal a snap instead of a morph.
-        let chinSize = CGSize(width: pillRect.width, height: max(chinHeight, Island.chinHeight))
+        let chinSize = CGSize(width: pillRect.width, height: max(chinHeight, Island.chinHeight(.open)))
         content.bounds = CGRect(origin: .zero, size: chinSize)
         content.position = CGPoint(x: pillRect.width / 2, y: chinHeight)
         content.opacity = open ? 1 : 0
         content.transform = open ? CATransform3DIdentity : CATransform3DMakeScale(1, 0.6, 1)
 
         let midY = chinSize.height / 2
-        dot.frame = CGRect(x: Island.flare(open: true) + 20, y: midY - 3, width: 6, height: 6)
+        dot.frame = CGRect(x: Island.flare(.open) + 20, y: midY - 3, width: 6, height: 6)
 
         let waveLeft = (chinSize.width - Wave.totalWidth) / 2
         let baseY = midY - Wave.maxHeight / 2
@@ -347,6 +379,14 @@ private final class IslandController {
     private var panel: NSPanel?
     private var view: IslandView?
 
+    /// Recording owns the island while true; hover may only peek when it is
+    /// idle, and never interrupts an open island.
+    private var recording = false
+    private var hovering = false
+    private var pendingPeek: DispatchWorkItem?
+    private var pendingUnpeek: DispatchWorkItem?
+    private var mouseMonitors: [Any] = []
+
     private func ensurePanel() -> (NSPanel, IslandView)? {
         if let panel, let view { return (panel, view) }
         // The notched screen, NOT NSScreen.main: main is the screen with
@@ -361,7 +401,10 @@ private final class IslandController {
 
         // Wide and tall enough for the fully open island; the panel itself never
         // resizes, so nothing but the layer moves during an animation.
-        let size = NSSize(width: cutoutWidth + Island.openOverhang * 4, height: safeAreaTop + Island.chinHeight + 20)
+        let size = NSSize(
+            width: cutoutWidth + (Island.overhang(.open) + Island.flare(.open)) * 2 + 40,
+            height: safeAreaTop + Island.chinHeight(.open) + 20
+        )
         let origin = NSPoint(
             x: screen.frame.midX - size.width / 2,
             y: screen.frame.maxY - size.height
@@ -388,7 +431,59 @@ private final class IslandController {
 
         self.panel = panel
         self.view = view
+        // Resident from now on: the closed pill is black over the black
+        // housing, so an on-screen panel costs nothing visually, and hover
+        // has to work while nothing is being recorded.
+        panel.orderFrontRegardless()
+        installHoverMonitor(panel: panel, view: view)
         return (panel, view)
+    }
+
+    // MARK: Hover
+
+    /// The panel keeps `ignoresMouseEvents = true` — accepting events would
+    /// steal menu-bar clicks near the notch — so hover is derived from a
+    /// global mouse-moved monitor instead of a tracking area. Global monitors
+    /// don't see our own app's events; the local one covers that.
+    private func installHoverMonitor(panel: NSPanel, view: IslandView) {
+        let handler: (NSEvent) -> Void = { [weak self, weak panel, weak view] _ in
+            guard let self, let panel, let view else { return }
+            let inWindow = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+            let inView = view.convert(inWindow, from: nil)
+            self.setHovering(view.hoverRect.contains(inView))
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: handler) {
+            mouseMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { e in handler(e); return e }) {
+            mouseMonitors.append(local)
+        }
+    }
+
+    private func setHovering(_ now: Bool) {
+        guard now != hovering else { return }
+        hovering = now
+        guard !recording, let view else { return }
+        if now {
+            pendingUnpeek?.cancel()
+            // A dwell, so a pointer merely crossing the top edge on its way
+            // to a menu doesn't make the island twitch.
+            let peek = DispatchWorkItem { [weak self] in
+                guard let self, self.hovering, !self.recording else { return }
+                self.view?.layoutPill(.peek, animated: true)
+            }
+            pendingPeek = peek
+            DispatchQueue.main.asyncAfter(deadline: .now() + Island.hoverDwell, execute: peek)
+        } else {
+            pendingPeek?.cancel()
+            guard view.state == .peek else { return }
+            let unpeek = DispatchWorkItem { [weak self] in
+                guard let self, !self.hovering, !self.recording else { return }
+                self.view?.layoutPill(.closed, animated: true)
+            }
+            pendingUnpeek = unpeek
+            DispatchQueue.main.asyncAfter(deadline: .now() + Island.hoverExitGrace, execute: unpeek)
+        }
     }
 
     /// True only on displays with a camera housing; callers fall back to the
@@ -397,22 +492,26 @@ private final class IslandController {
         NSScreen.screens.contains { notchMetrics(of: $0) != nil }
     }
 
+    func prepare() {
+        _ = ensurePanel()
+    }
+
     func show() {
-        guard let (panel, view) = ensurePanel() else { return }
+        guard let (_, view) = ensurePanel() else { return }
+        recording = true
+        pendingPeek?.cancel()
+        pendingUnpeek?.cancel()
         view.resetWave()
-        panel.orderFrontRegardless()
-        view.layoutPill(open: true, animated: true)
+        view.layoutPill(.open, animated: true)
     }
 
     func hide() {
         guard let view else { return }
-        view.layoutPill(open: false, animated: true)
-        // Order out once the close is perceptually done — Apple's rule is the
-        // perceptual duration, not the settling time — plus a hair so the
-        // last frame of a critically damped close is never cut.
-        DispatchQueue.main.asyncAfter(deadline: .now() + Island.closeDuration + 0.05) { [weak self] in
-            self?.panel?.orderOut(nil)
-        }
+        recording = false
+        // The panel stays resident (hover needs it); only the pill collapses.
+        // If the pointer is already resting on it, settle into the peek
+        // rather than snapping shut under the cursor.
+        view.layoutPill(hovering ? .peek : .closed, animated: true)
     }
 
     func setLevel(_ level: CGFloat) {
@@ -430,6 +529,13 @@ public func notch_overlay_available() -> Int32 {
         return IslandController.shared.hasNotch() ? 1 : 0
     }
     return DispatchQueue.main.sync { IslandController.shared.hasNotch() ? 1 : 0 }
+}
+
+/// Put the island on screen at rest so hover works before the first
+/// recording. Harmless to call more than once or on a notchless machine.
+@_cdecl("notch_overlay_prepare")
+public func notch_overlay_prepare() {
+    DispatchQueue.main.async { IslandController.shared.prepare() }
 }
 
 @_cdecl("notch_overlay_show")
