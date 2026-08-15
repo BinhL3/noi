@@ -1,0 +1,47 @@
+[
+  {
+    "id": "compound-spotify-video",
+    "note": "The original example. Three intents, two domains, one deferred in time.",
+    "raw": "Play spotify and also note down my next item to make a video and remind about it",
+    "expect": {
+      "refine": "Play Spotify, and also note down my next item to make a video and remind me about it.",
+      "intents": ["music", "note", "reminder"]
+    }
+  },
+  {
+    "id": "self-correcting-rant",
+    "note": "Real dictation. Self-corrections, mid-sentence topic switch, an aside. This is the hard case.",
+    "raw": "I too I honestly don't mind with like just the Spotify you know notification saying that what it's currently playing that sounds fine to me and next one probably yeah I mean i think the overredance like it can be split down a middle like not not just now playing et cetera right i feel like it's such an easy API and regardless I really just want to test with that implementation cause I'm really I just love that Ui so much for some reason I'm addicted to it even though it's very minor",
+    "expect": {
+      "refine": "I honestly don't mind just the Spotify notification saying what it's currently playing — that sounds fine to me. I think it can be split down the middle, not just now playing. It's such an easy API, and regardless I really just want to test that implementation, because I love that UI so much. I'm addicted to it, even though it's very minor.",
+      "intents": ["note"]
+    }
+  },
+  {
+    "id": "scribe-spec",
+    "note": "Dictated product spec. Long, run-on, no punctuation. Should refine but produce NO actions.",
+    "raw": "it refines text based on a user's input. in In Welllo, if you press command on the right once, it's going to pop up the scribe feature and then it basically just asks you to like describe whatever I plan to just have it like if you press that command key once it's gonna refine it but if you hold that command key and let go after describing it it's going to have the prompt applied like that",
+    "expect": {
+      "refine": "It refines text based on the user's input. In Willow, if you press the right command key once, it pops up the scribe feature and asks you to describe what you want. I plan to have it work like this: press the command key once and it refines the text; hold the command key, describe what you want, and let go, and it applies that description as a prompt.",
+      "intents": ["note"]
+    }
+  },
+  {
+    "id": "pure-note-no-action",
+    "note": "Trap case. Mentions a reminder-ish word but is not asking for one.",
+    "raw": "um i was thinking about how reminders never really work for me because i just dismiss them",
+    "expect": {
+      "refine": "I was thinking about how reminders never really work for me, because I just dismiss them.",
+      "intents": ["note"]
+    }
+  },
+  {
+    "id": "explicit-reminder-with-time",
+    "note": "The one case where a time is genuinely spoken.",
+    "raw": "remind me to push the notch branch tomorrow morning",
+    "expect": {
+      "refine": "Remind me to push the notch branch tomorrow morning.",
+      "intents": ["reminder"]
+    }
+  }
+]
