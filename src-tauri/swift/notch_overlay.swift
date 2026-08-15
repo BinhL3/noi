@@ -243,6 +243,11 @@ private final class IslandView: NSView {
     private enum Text {
         static let font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
         static let width: CGFloat = 40
+        /// The clock is small and only appears once a dictation runs long
+        /// enough that "am I still recording?" becomes a real question.
+        static let clockFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        static let clockWidth: CGFloat = 34
+        static let clockAfter: TimeInterval = 8
     }
     private enum Tint {
         /// Voice Memos red.
@@ -374,8 +379,8 @@ private final class IslandView: NSView {
         shimmer.locations = [0.35, 0.5, 0.65]
 
         timer.string = "0:00"
-        timer.font = Text.font
-        timer.fontSize = Text.font.pointSize
+        timer.font = Text.clockFont
+        timer.fontSize = Text.clockFont.pointSize
         timer.foregroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
         timer.alignmentMode = .left
         timer.truncationMode = .none
@@ -619,7 +624,8 @@ private final class IslandView: NSView {
         checkStroke.isHidden = !isCheck
         for wave in waveLayers { wave.isHidden = !recording; wave.opacity = 1 }
         timer.isHidden = !recording
-        timer.opacity = 1
+        // Starts invisible; updateTimer fades it in after Text.clockAfter.
+        timer.opacity = 0
         symbol.opacity = 1
         label.isHidden = recording
 
@@ -643,7 +649,7 @@ private final class IslandView: NSView {
         // Measure the cluster: recording = wave · clock; otherwise glyph · label.
         let glyphWidth = Glyph.symbolSize
         let labelWidth = text.isEmpty ? 0 : ceil((text as NSString).size(withAttributes: [.font: Text.font]).width) + 2
-        let clusterWidth = recording ? Wave.totalWidth + gap + Text.width : glyphWidth + gap + labelWidth
+        let clusterWidth = recording ? Wave.totalWidth : glyphWidth + gap + labelWidth
         var x = (chinSize.width - clusterWidth) / 2
 
         if !recording {
@@ -662,8 +668,15 @@ private final class IslandView: NSView {
             CATransaction.setDisableActions(true)
             redrawWaves()
             CATransaction.commit()
-            x += Wave.totalWidth + gap
-            timer.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: Text.width, height: textHeight)
+            // The clock sits at the right margin, off the wave, so its arrival
+            // moves nothing.
+            let clockHeight = ceil(Text.clockFont.ascender - Text.clockFont.descender)
+            timer.frame = CGRect(
+                x: chinSize.width - Island.flare(.open) - 12 - Text.clockWidth,
+                y: midY - clockHeight / 2 - 1,
+                width: Text.clockWidth,
+                height: clockHeight
+            )
         } else {
             label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
         }
@@ -872,13 +885,17 @@ private final class IslandView: NSView {
 
     private func updateTimer() {
         guard let start = recordingStart else { return }
-        let elapsed = Int(Date().timeIntervalSince(start))
+        let seconds = Date().timeIntervalSince(start)
+        let elapsed = Int(seconds)
         let text = String(format: "%d:%02d", elapsed / 60, elapsed % 60)
         // Text changes must not cross-fade; a ticking clock should just tick.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         timer.string = text
         CATransaction.commit()
+        if seconds >= Text.clockAfter, timer.opacity == 0, mode.isRecording {
+            timer.opacity = 1 // implicit fade
+        }
     }
 }
 
