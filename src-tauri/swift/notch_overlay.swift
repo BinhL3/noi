@@ -32,7 +32,7 @@ enum IslandMode: Equatable {
     case dictate
     case instruct
     /// The refine key was tapped once: the island acknowledges — sparkle,
-    /// "Refine · hold to describe a change" — and waits out the tap window
+    /// "Refine · press again to describe a change" — and waits out the tap window
     /// to see whether a hold follows (→ instruct) or not (→ working).
     case armed
     /// Label plus the SF Symbol that says which kind of work: transcribing
@@ -651,8 +651,8 @@ private final class IslandView: NSView {
         var text = ""
         switch mode {
         case .dictate: symbolName = ""
-        case .instruct: symbolName = "sparkles"; text = "Describe your change"
-        case .armed: symbolName = "sparkles"; text = "Refine · hold to describe a change"
+        case .instruct: symbolName = "sparkles"; text = "Describe your change · release to apply"
+        case .armed: symbolName = "sparkles"; text = "Refine · press again to describe a change"
         case .working(let s, let sym): symbolName = sym; text = s
         case .done(let ok): symbolName = ok ? "" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
         }
