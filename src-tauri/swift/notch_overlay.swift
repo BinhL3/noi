@@ -215,6 +215,9 @@ private final class IslandView: NSView {
     private let checkStroke = CAShapeLayer()
     /// Status text for working/done ("Refining…", "Done").
     private let label = CATextLayer()
+    /// Second, smaller line under the label for the refine hints ("press
+    /// again to describe a change"); empty in the other modes.
+    private let sublabel = CATextLayer()
     /// Halo behind the sparkle for the armed acknowledgement: a soft lavender
     /// disc that blooms once as the sparkle pops in.
     private let halo = CALayer()
@@ -260,6 +263,9 @@ private final class IslandView: NSView {
         static let clockFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         static let clockWidth: CGFloat = 34
         static let clockAfter: TimeInterval = 8
+        /// Two-line hint for the refine gesture: title + quieter sub.
+        static let titleFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        static let subFont = NSFont.systemFont(ofSize: 11, weight: .medium)
     }
     private enum Tint {
         /// Voice Memos red.
@@ -379,6 +385,14 @@ private final class IslandView: NSView {
         label.alignmentMode = .left
         label.truncationMode = .end
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+
+        sublabel.font = Text.subFont
+        sublabel.fontSize = Text.subFont.pointSize
+        sublabel.foregroundColor = NSColor.white.withAlphaComponent(0.55).cgColor
+        sublabel.alignmentMode = .left
+        sublabel.truncationMode = .end
+        sublabel.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        content.addSublayer(sublabel)
 
         halo.backgroundColor = WavePalette.instruct[0].withAlphaComponent(0.35).cgColor
         halo.opacity = 0
@@ -614,7 +628,6 @@ private final class IslandView: NSView {
     private func layoutCluster(in chinSize: CGSize) {
         let gap = Self.clusterGap
         let midY = chinSize.height / 2
-        let textHeight = ceil(Text.font.ascender - Text.font.descender)
         let recording = mode.isRecording
 
         // Tint everything that carries the mode colour.
@@ -649,10 +662,11 @@ private final class IslandView: NSView {
         // Symbol image + label text for the mode.
         let symbolName: String
         var text = ""
+        var sub = ""
         switch mode {
         case .dictate: symbolName = ""
-        case .instruct: symbolName = "sparkles"; text = "Describe your change · release to apply"
-        case .armed: symbolName = "sparkles"; text = "Refine · press again to describe a change"
+        case .instruct: symbolName = "sparkles"; text = "Describe your change"; sub = "release to apply"
+        case .armed: symbolName = "sparkles"; text = "Refine"; sub = "press again to describe a change"
         case .working(let s, let sym): symbolName = sym; text = s
         case .done(let ok): symbolName = ok ? "" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
         }
@@ -662,11 +676,21 @@ private final class IslandView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         label.string = text
+        sublabel.string = sub
+        // The refine hints use the compact two-line face; everything else the
+        // single 15pt line.
+        let twoLine = !sub.isEmpty
+        label.font = twoLine ? Text.titleFont : Text.font
+        label.fontSize = (twoLine ? Text.titleFont : Text.font).pointSize
+        sublabel.isHidden = !twoLine
         CATransaction.commit()
 
         // Measure the cluster: recording = wave · clock; otherwise glyph · label.
         let glyphWidth = Glyph.symbolSize
-        let labelWidth = text.isEmpty ? 0 : ceil((text as NSString).size(withAttributes: [.font: Text.font]).width) + 2
+        let titleFont = twoLine ? Text.titleFont : Text.font
+        let titleWidth = text.isEmpty ? 0 : ceil((text as NSString).size(withAttributes: [.font: titleFont]).width) + 2
+        let subWidth = sub.isEmpty ? 0 : ceil((sub as NSString).size(withAttributes: [.font: Text.subFont]).width) + 2
+        let labelWidth = max(titleWidth, subWidth)
         let instruct = mode == .instruct
         let waveWidth = instruct ? Wave.instructWidth : Wave.totalWidth
         let clusterWidth = instruct ? waveWidth + gap + labelWidth
@@ -700,10 +724,10 @@ private final class IslandView: NSView {
             )
             if instruct {
                 x += waveWidth + gap
-                label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
+                placeText(x: x, midY: midY, width: labelWidth, twoLine: twoLine)
             }
         } else {
-            label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
+            placeText(x: x, midY: midY, width: labelWidth, twoLine: twoLine)
         }
 
         // Armed: the sparkle pops in (spring, slight overshoot) with a soft
@@ -768,6 +792,22 @@ private final class IslandView: NSView {
             symbol.removeAnimation(forKey: "breathe")
             shimmer.removeAnimation(forKey: "sweep")
             label.mask = nil
+        }
+    }
+
+    /// Title (and sub, if any) at `x`, vertically centred as a block.
+    private func placeText(x: CGFloat, midY: CGFloat, width: CGFloat, twoLine: Bool) {
+        if twoLine {
+            let th = ceil(Text.titleFont.ascender - Text.titleFont.descender)
+            let sh = ceil(Text.subFont.ascender - Text.subFont.descender)
+            let gap: CGFloat = 1
+            let block = th + gap + sh
+            // y-up: title on top.
+            label.frame = CGRect(x: x, y: midY - block / 2 + sh + gap, width: width, height: th)
+            sublabel.frame = CGRect(x: x, y: midY - block / 2, width: width, height: sh)
+        } else {
+            let th = ceil(Text.font.ascender - Text.font.descender)
+            label.frame = CGRect(x: x, y: midY - th / 2 - 1, width: width, height: th)
         }
     }
 
