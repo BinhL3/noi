@@ -864,6 +864,20 @@ private final class IslandView: NSView {
     /// evaporated and the release felt like nothing happened.
     private static let releaseSettle: CFTimeInterval = 0.34
     private var modeGeneration = 0
+    /// The armed hint has to be readable: the gesture resolves at the tap
+    /// window, but the island keeps "Refine / press again to describe a
+    /// change" on screen for at least this long before moving on. A second
+    /// press (→ instruct) is never delayed.
+    private static let armedMinDwell: TimeInterval = 1.6
+    private var armedAt: TimeInterval = 0
+    private var deferredMode: DispatchWorkItem?
+
+    /// How much longer the armed hint must stay before another mode may
+    /// replace it (0 when not armed).
+    func remainingArmedDwell() -> TimeInterval {
+        guard mode == .armed else { return 0 }
+        return max(0, Self.armedMinDwell - (CACurrentMediaTime() - armedAt))
+    }
 
     func setMode(_ m: IslandMode) {
         guard m != mode else { return }
@@ -872,6 +886,17 @@ private final class IslandView: NSView {
         // would flash the plain wave. Skip it; instruct follows at once.
         if mode == .armed, m == .dictate { return }
         let armedToInstruct = mode == .armed && m == .instruct
+        deferredMode?.cancel()
+        if mode == .armed, !armedToInstruct {
+            let shown = CACurrentMediaTime() - armedAt
+            if shown < Self.armedMinDwell {
+                let work = DispatchWorkItem { [weak self] in self?.setMode(m) }
+                deferredMode = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + (Self.armedMinDwell - shown), execute: work)
+                return
+            }
+        }
+        if m == .armed { armedAt = CACurrentMediaTime() }
         let wasRecording = mode.isRecording
         mode = m
         modeGeneration += 1
@@ -1226,9 +1251,12 @@ private final class IslandController {
     /// tap-refine that never recorded still gets its "Done".
     func finish(ok: Bool) {
         guard let (_, view) = ensurePanel() else { return }
+        // "Done" may be held back until the armed hint has been readable;
+        // the close waits the same amount, then a second on top.
+        let wait = view.remainingArmedDwell() + 1.0
         view.setMode(.done(ok: ok))
         show()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
             guard let self, self.view?.mode == .done(ok: ok) else { return }
             self.hide()
         }
