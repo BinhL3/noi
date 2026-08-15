@@ -219,8 +219,9 @@ private final class IslandView: NSView {
     private enum Tint {
         /// Voice Memos red.
         static let dictate = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
-        /// systemPurple, the "intelligence" hue.
-        static let instruct = NSColor(red: 0.75, green: 0.35, blue: 0.95, alpha: 1)
+        /// The brand accent — a light steel blue — for anything that is the
+        /// assistant rather than the recording.
+        static let instruct = NSColor(red: 0.62, green: 0.77, blue: 0.91, alpha: 1)
         static let ok = NSColor(red: 0.19, green: 0.82, blue: 0.35, alpha: 1)
         static let fail = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
     }
