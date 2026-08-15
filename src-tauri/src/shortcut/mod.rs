@@ -55,6 +55,42 @@ pub fn init_shortcuts(app: &AppHandle) {
     }
 }
 
+/// Which binding owns a key when two are set to the same combination.
+/// Earlier wins. Bindings come out of a HashMap, so without this the winner
+/// changed from launch to launch: refine-on-selection and Handy's
+/// transcribe-with-post-process both default to Right ⌘ on this fork.
+const BINDING_PRIORITY: &[&str] = &[
+    "transcribe",
+    "refine_selection",
+    "transcribe_with_post_process",
+];
+
+/// The id of a higher-priority binding that already claims `binding`'s key,
+/// if any. Callers skip registering shadowed bindings.
+pub fn shadowed_by<'a>(
+    id: &str,
+    binding: &settings::ShortcutBinding,
+    bindings: &'a std::collections::HashMap<String, settings::ShortcutBinding>,
+) -> Option<&'a str> {
+    let rank = |i: &str| {
+        BINDING_PRIORITY
+            .iter()
+            .position(|p| *p == i)
+            .unwrap_or(usize::MAX)
+    };
+    let mine = rank(id);
+    bindings
+        .iter()
+        .filter(|(other, b)| {
+            other.as_str() != id
+                && !b.current_binding.is_empty()
+                && b.current_binding == binding.current_binding
+                && rank(other) < mine
+        })
+        .map(|(other, _)| other.as_str())
+        .next()
+}
+
 /// Register the cancel shortcut (called when recording starts)
 pub fn register_cancel_shortcut(app: &AppHandle) {
     // Track recording lifecycle independently of the current implementation so
@@ -456,6 +492,13 @@ fn register_all_shortcuts_for_implementation(
             .get(id)
             .cloned()
             .unwrap_or_else(|| default_binding.clone());
+        if let Some(owner) = shadowed_by(id, &binding, &current_settings.bindings) {
+            warn!(
+                "Not registering '{}': its key '{}' belongs to '{}'",
+                id, binding.current_binding, owner
+            );
+            continue;
+        }
 
         // Validate the shortcut for the target implementation
         if let Err(e) =

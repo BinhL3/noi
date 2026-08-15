@@ -196,6 +196,11 @@ private final class IslandView: NSView {
     /// SF Symbol glyphs for the non-dictation modes: sparkles for instruct
     /// and working, a check or an x for done.
     private let symbol = CALayer()
+    /// The completion mark: a green disc that pops in and a white check that
+    /// draws itself on — Apple's own completion gesture (Apple Pay, Shortcuts),
+    /// not a static glyph.
+    private let checkDisc = CAShapeLayer()
+    private let checkStroke = CAShapeLayer()
     /// Status text for working/done ("Refining…", "Done").
     private let label = CATextLayer()
     /// A band of light sweeping through the working label — the system's
@@ -327,6 +332,17 @@ private final class IslandView: NSView {
         glyphSquare.backgroundColor = Wave.tint.cgColor
         glyphSquare.cornerRadius = Glyph.squareRadius
         content.addSublayer(glyphSquare)
+
+        checkDisc.fillColor = NSColor.systemGreen.cgColor
+        checkDisc.isHidden = true
+        content.addSublayer(checkDisc)
+        checkStroke.strokeColor = NSColor.white.cgColor
+        checkStroke.fillColor = NSColor.clear.cgColor
+        checkStroke.lineWidth = 2.4
+        checkStroke.lineCap = .round
+        checkStroke.lineJoin = .round
+        checkStroke.isHidden = true
+        content.addSublayer(checkStroke)
 
         symbol.contentsGravity = .resizeAspect
         symbol.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
@@ -592,7 +608,10 @@ private final class IslandView: NSView {
         // Which members are present.
         glyphRing.isHidden = !usesRing
         glyphSquare.isHidden = !usesRing
-        symbol.isHidden = usesRing
+        let isCheck = mode == .done(ok: true)
+        symbol.isHidden = usesRing || isCheck
+        checkDisc.isHidden = !isCheck
+        checkStroke.isHidden = !isCheck
         for bar in bars { bar.isHidden = !recording; bar.opacity = 1 }
         timer.isHidden = !recording
         timer.opacity = 1
@@ -608,7 +627,7 @@ private final class IslandView: NSView {
         case .dictate: symbolName = ""
         case .instruct: symbolName = "sparkles"
         case .working(let s): symbolName = "sparkles"; text = s
-        case .done(let ok): symbolName = ok ? "checkmark.circle.fill" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
+        case .done(let ok): symbolName = ok ? "" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
         }
         if !symbolName.isEmpty {
             symbol.contents = symbolImage(symbolName, size: Glyph.symbolSize, color: tint)
@@ -635,6 +654,9 @@ private final class IslandView: NSView {
             height: Glyph.squareSide
         )
         symbol.frame = glyphRect
+        if isCheck {
+            layoutCheck(in: glyphRect)
+        }
         x += glyphWidth + gap
 
         if recording {
@@ -684,6 +706,41 @@ private final class IslandView: NSView {
             shimmer.removeAnimation(forKey: "sweep")
             label.mask = nil
         }
+    }
+
+    /// Place the completion mark in `rect` and play it: disc pops (scale
+    /// 0.5 → 1 with a small overshoot), then the check strokes on over
+    /// 0.28s. Re-layout while showing does not replay.
+    private func layoutCheck(in rect: CGRect) {
+        let d = rect.width
+        checkDisc.frame = rect
+        checkDisc.path = CGPath(ellipseIn: CGRect(origin: .zero, size: rect.size), transform: nil)
+        checkStroke.frame = rect
+        // Check geometry in the disc's local space (y-up): short stroke down
+        // to the elbow, long stroke up to the tip.
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: d * 0.28, y: d * 0.52))
+        p.addLine(to: CGPoint(x: d * 0.44, y: d * 0.35))
+        p.addLine(to: CGPoint(x: d * 0.73, y: d * 0.66))
+        checkStroke.path = p
+
+        guard checkDisc.animation(forKey: "pop") == nil else { return }
+        let pop = CASpringAnimation(keyPath: "transform.scale")
+        pop.fromValue = 0.5
+        pop.toValue = 1
+        pop.mass = 1; pop.stiffness = 320; pop.damping = 18
+        pop.duration = pop.settlingDuration
+        checkDisc.add(pop, forKey: "pop")
+
+        let draw = CABasicAnimation(keyPath: "strokeEnd")
+        draw.fromValue = 0
+        draw.toValue = 1
+        draw.duration = 0.28
+        draw.beginTime = CACurrentMediaTime() + 0.08
+        draw.fillMode = .backwards
+        draw.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        checkStroke.strokeEnd = 1
+        checkStroke.add(draw, forKey: "draw")
     }
 
     /// A tinted SF Symbol as a CGImage, at 2x for Retina.
@@ -1002,6 +1059,14 @@ private final class IslandController {
         // If the pointer is already resting on it, settle into the peek
         // rather than snapping shut under the cursor.
         view.layoutPill(hovering ? .peek : .closed, animated: true)
+        // Once shut, forget the last mode so the next open — even another
+        // "done" — lays out and animates fresh. setMode ignores same-mode
+        // calls, so without this a second refine in a row would not replay
+        // the completion mark.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Island.shrinkDuration + 0.1) { [weak self] in
+            guard let self, !self.recording, let view = self.view, view.state != .open else { return }
+            view.setMode(.dictate)
+        }
     }
 
     func setLevel(_ level: CGFloat) {

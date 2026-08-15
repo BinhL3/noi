@@ -28,7 +28,7 @@
 //! via Tauri's event system.
 
 use handy_keys::{Hotkey, HotkeyId, HotkeyManager, HotkeyState, KeyboardListener};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::Serialize;
 use specta::Type;
 use std::collections::HashMap;
@@ -443,6 +443,13 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
             .get(&id)
             .cloned()
             .unwrap_or(default_binding);
+        if let Some(owner) = super::shadowed_by(&id, &binding, &user_settings.bindings) {
+            warn!(
+                "Not registering '{}': its key '{}' belongs to '{}'",
+                id, binding.current_binding, owner
+            );
+            continue;
+        }
 
         if let Err(e) = state.register(&binding) {
             error!(

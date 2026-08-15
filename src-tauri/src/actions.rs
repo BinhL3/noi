@@ -858,7 +858,11 @@ impl ShortcutAction for TranscribeAction {
         play_feedback_sound(app, SoundType::Stop);
 
         let binding_id = binding_id.to_string(); // Clone binding_id for the async task
-        let post_process = self.post_process;
+                                                 // In this fork "Refine dictation" is a switch, not a second shortcut:
+                                                 // when it is on, plain dictation is refined too. The dedicated
+                                                 // post-process binding still forces it regardless.
+        let post_process =
+            self.post_process || (!self.use_selection && get_settings(app).post_process_enabled);
         let cancel_generation = rm.cancel_generation();
 
         tauri::async_runtime::spawn(async move {
