@@ -1,6 +1,14 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Cog, FlaskConical, History, Info, Sparkles, Cpu, SlidersHorizontal } from "lucide-react";
+import {
+  Cog,
+  FlaskConical,
+  History,
+  Info,
+  Sparkles,
+  Cpu,
+  SlidersHorizontal,
+} from "lucide-react";
 import NoiWordmark from "./icons/NoiWordmark";
 import { useSettings } from "../hooks/useSettings";
 import {
@@ -78,11 +86,14 @@ export const SECTIONS_CONFIG = {
 interface SidebarProps {
   activeSection: SidebarSection;
   onSectionChange: (section: SidebarSection) => void;
+  /** Return to Noi's single-column settings. */
+  onShowSimple?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeSection,
   onSectionChange,
+  onShowSimple,
 }) => {
   const { t } = useTranslation();
   const { settings } = useSettings();
@@ -120,6 +131,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })}
       </div>
+      {onShowSimple && (
+        <button
+          type="button"
+          onClick={onShowSimple}
+          className="mt-auto mb-3 text-xs text-mid-gray hover:text-text cursor-pointer"
+        >
+          {t("simple.backToSimple")}
+        </button>
+      )}
     </div>
   );
 };

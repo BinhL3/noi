@@ -15,6 +15,12 @@ import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
+import { SimpleSettings } from "./components/settings/simple/SimpleSettings";
+import {
+  getSettingsMode,
+  setSettingsMode,
+  SettingsMode,
+} from "./lib/utils/settingsMode";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
@@ -38,6 +44,11 @@ function App() {
   const [isReturningUser, setIsReturningUser] = useState(false);
   const [currentSection, setCurrentSection] =
     useState<SidebarSection>("general");
+  const [settingsMode, setMode] = useState<SettingsMode>(getSettingsMode());
+  const switchMode = (mode: SettingsMode) => {
+    setSettingsMode(mode);
+    setMode(mode);
+  };
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
   const refreshAudioDevices = useSettingsStore(
@@ -298,22 +309,35 @@ function App() {
         <div data-tauri-drag-region className="titlebar-drag" />
         {/* Main content area that takes remaining space */}
         <div className="flex-1 flex overflow-hidden">
-          <Sidebar
-            activeSection={currentSection}
-            onSectionChange={setCurrentSection}
-          />
-          {/* Scrollable content area. A soft fill over the glass keeps long
-              settings text readable on busy wallpapers; the sidebar stays
-              clear so the glass shows. */}
-          <div className="flex-1 flex flex-col overflow-hidden bg-background/40 border-s border-text/10">
+          {settingsMode === "simple" ? (
             <div className="flex-1 overflow-y-auto">
               <div className="flex flex-col items-center p-4 gap-4">
                 <AccessibilityPermissions />
                 <SecureInputWarning />
-                {renderSettingsContent(currentSection)}
+                <SimpleSettings onShowFull={() => switchMode("full")} />
               </div>
             </div>
-          </div>
+          ) : (
+            <>
+              <Sidebar
+                activeSection={currentSection}
+                onSectionChange={setCurrentSection}
+                onShowSimple={() => switchMode("simple")}
+              />
+              {/* Scrollable content area. A soft fill over the glass keeps long
+              settings text readable on busy wallpapers; the sidebar stays
+              clear so the glass shows. */}
+              <div className="flex-1 flex flex-col overflow-hidden bg-background/40 border-s border-text/10">
+                <div className="flex-1 overflow-y-auto">
+                  <div className="flex flex-col items-center p-4 gap-4">
+                    <AccessibilityPermissions />
+                    <SecureInputWarning />
+                    {renderSettingsContent(currentSection)}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
         {/* Fixed footer at bottom */}
         <Footer />

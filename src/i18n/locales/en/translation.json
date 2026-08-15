@@ -683,5 +683,15 @@
     "learnMore": "How to fix",
     "recorderBlocked": "Can't record shortcuts right now — macOS Secure Input is blocking key events. Resolve the Secure Input warning first.",
     "dismiss": "Dismiss"
+  },
+  "simple": {
+    "general": "General",
+    "speech": "Speech model",
+    "refine": "Refine",
+    "history": "History",
+    "showHistory": "Show transcripts",
+    "hideHistory": "Hide transcripts",
+    "advanced": "Advanced settings ›",
+    "backToSimple": "‹ Simple settings"
   }
 }

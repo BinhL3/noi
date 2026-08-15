@@ -40,15 +40,18 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
     const downloadable = models.filter(
       (m: ModelInfo) => !m.is_downloaded && !isLegacySource(m),
     );
+    // Noi features ONE model: Nemotron streaming — small, multilingual, and
+    // it streams, which is what the live island wants. Everything else,
+    // recommended or not, sits behind "Show all".
     const recommended = downloadable.filter((m: ModelInfo) => m.is_recommended);
-    // `models` arrives in editorial rank order (the backend sorts by rank_of,
-    // then accuracy), so keep that order here: ranked-but-not-recommended models
-    // surface first, then the unranked tail by accuracy.
+    const featured =
+      recommended.find((m: ModelInfo) => /nemotron/i.test(m.id)) ??
+      recommended[0];
     const rest = downloadable.filter((m: ModelInfo) => !m.is_recommended);
     return {
       downloadable,
-      topPicks: recommended.slice(0, 2),
-      otherRecommended: recommended.slice(2),
+      topPicks: featured ? [featured] : [],
+      otherRecommended: recommended.filter((m: ModelInfo) => m !== featured),
       rest,
     };
   }, [models]);
