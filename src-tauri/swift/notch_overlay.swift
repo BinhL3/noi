@@ -144,19 +144,6 @@ private func islandBounds(_ size: CGSize) -> CGRect {
     CGRect(x: -size.width / 2, y: 0, width: size.width, height: size.height)
 }
 
-/// The bottom run of the outline — down the left round, along the bottom,
-/// up the right round — in centred coordinates. The refine capsule strokes
-/// this so its fill travels the island's own edge.
-private func bottomEdgePath(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat) -> CGPath {
-    let w = size.width
-    let p = CGMutablePath()
-    p.move(to: CGPoint(x: -w / 2 + f, y: r))
-    p.addQuadCurve(to: CGPoint(x: -w / 2 + f + r, y: 0), control: CGPoint(x: -w / 2 + f, y: 0))
-    p.addLine(to: CGPoint(x: w / 2 - f - r, y: 0))
-    p.addQuadCurve(to: CGPoint(x: w / 2 - f, y: r), control: CGPoint(x: w / 2 - f, y: 0))
-    return p
-}
-
 /// `closed: false` leaves out the top edge — the segment along the screen
 /// edge — for stroking: the fill needs it, but a key line drawn there is a
 /// seam between the island and the housing, and lightens the island's top so
@@ -394,8 +381,9 @@ private final class IslandView: NSView {
         label.truncationMode = .end
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
 
-        // On the outline itself, inside the pill's mask: half the stroke is
-        // clipped, so it reads as the edge lighting up, not a bar above it.
+        // On the outline itself — the whole open silhouette, flares to flares
+        // — inside the pill's mask: half the stroke is clipped, so it reads as
+        // the island's edge lighting up, not a bar drawn on it.
         capsule.fillColor = NSColor.clear.cgColor
         capsule.lineWidth = 4
         capsule.lineCap = .round
@@ -484,7 +472,7 @@ private final class IslandView: NSView {
             }
             clip.path = targetPath
             rim.path = path(for: target.size, s, closed: false)
-            capsule.path = bottomEdgePath(size: target.size, cornerRadius: Island.cornerRadius(s), flare: Island.flare(s))
+            capsule.path = rim.path
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
             layoutContents(s)
@@ -540,14 +528,10 @@ private final class IslandView: NSView {
         clip.add(pathSpring, forKey: "path")
         rim.path = rimPath
         rim.add(rimSpring, forKey: "path")
-        let edgePath = bottomEdgePath(size: target.size, cornerRadius: Island.cornerRadius(s), flare: Island.flare(s))
-        let edgeSpring = springAnimation(keyPath: "path", duration: duration, bounce: bounce)
-        edgeSpring.fromValue = capsule.path
-        edgeSpring.toValue = edgePath
-        edgeSpring.beginTime = CACurrentMediaTime() + contentLead
-        edgeSpring.fillMode = .backwards
-        capsule.path = edgePath
-        capsule.add(edgeSpring, forKey: "path")
+        // The capsule traces the whole open outline — the rim's path — so the
+        // island itself lights up from the top-left flare, down, around and up.
+        capsule.path = rimPath
+        capsule.add(rimSpring, forKey: "path")
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.bounds = targetBounds
         shadowLayer.shadowPath = targetPath
