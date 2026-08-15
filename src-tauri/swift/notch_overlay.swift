@@ -29,14 +29,14 @@ private enum Island {
     /// Chin below the housing, per state. Closed is exactly the housing so
     /// the pill is invisible at rest.
     static func chinHeight(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 0; case .peek: 6; case .open: 44 }
+        switch s { case .closed: 0; case .peek: 8; case .open: 62 }
     }
     /// How far the body extends past the cutout on each side. Closed carries
     /// a hair of slop so the anti-aliased seam where bezel meets pixels never
     /// shows a light gap; open grows well outward so the island reads as
     /// pushing out from behind the housing rather than merely dropping down.
     static func overhang(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 2; case .peek: 8; case .open: 36 }
+        switch s { case .closed: 2; case .peek: 10; case .open: 58 }
     }
     /// The concave fillet where the island meets the top screen edge. This is
     /// what makes it the Dynamic Island shape rather than a pill: the top
@@ -45,11 +45,11 @@ private enum Island {
     /// Both radii grow with the island — a constant radius makes the closed
     /// state look puffy and the open state look boxy.
     static func flare(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 6; case .peek: 9; case .open: 18 }
+        switch s { case .closed: 6; case .peek: 10; case .open: 22 }
     }
     /// Bottom corner radius. Open = flare + 5, the ratio the reference apps use.
     static func cornerRadius(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 14; case .peek: 16; case .open: 23 }
+        switch s { case .closed: 14; case .peek: 17; case .open: 28 }
     }
     /// Shadow only once lifted: at rest the island must read as hardware, and
     /// hardware does not cast a shadow onto the wallpaper.
@@ -61,10 +61,16 @@ private enum Island {
     /// perceptual duration + bounce, converted to CA's mass/stiffness/damping.
     /// Growing carries a small bounce so it reads as physical; shrinking is
     /// critically damped because springing back shut looks indecisive.
-    static let growDuration: CFTimeInterval = 0.42
-    static let growBounce: CGFloat = 0.22
-    static let shrinkDuration: CFTimeInterval = 0.42
+    static let growDuration: CFTimeInterval = 0.55
+    static let growBounce: CGFloat = 0.15
+    static let shrinkDuration: CFTimeInterval = 0.5
     static let shrinkBounce: CGFloat = 0
+    /// Content appears a beat after the shape starts moving, once there is
+    /// room for it, and leaves a beat before the shape shrinks. Both are what
+    /// separates a morph from a pop.
+    static let contentInDelay: CFTimeInterval = 0.08
+    static let contentOutDuration: CFTimeInterval = 0.22
+    static let contentOutLead: CFTimeInterval = 0.12
 
     /// Hover: dwell before the peek, grace after the pointer leaves, and how
     /// far outside the pill still counts as "on it" (larger once lifted so a
@@ -145,10 +151,10 @@ private final class IslandView: NSView {
     private var timerTick: Timer?
     private var recordingStart: Date?
     private enum Wave {
-        static let count = 22
-        static let barWidth: CGFloat = 2.5
-        static let gap: CGFloat = 2.5
-        static let maxHeight: CGFloat = 20
+        static let count = 26
+        static let barWidth: CGFloat = 3
+        static let gap: CGFloat = 3
+        static let maxHeight: CGFloat = 26
         /// Silence is a row of dots, not nothing.
         static let minScale: CGFloat = 0.12
         static var totalWidth: CGFloat {
@@ -158,19 +164,19 @@ private final class IslandView: NSView {
         static let tint = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
     }
     private enum Text {
-        static let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        static let width: CGFloat = 34
+        static let font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .medium)
+        static let width: CGFloat = 40
     }
     private enum Glyph {
-        static let ringDiameter: CGFloat = 18
+        static let ringDiameter: CGFloat = 22
         static let ringWidth: CGFloat = 1.5
-        static let squareSide: CGFloat = 7
-        static let squareRadius: CGFloat = 2
+        static let squareSide: CGFloat = 9
+        static let squareRadius: CGFloat = 2.5
     }
     /// Space between glyph, wave and timer. The three are laid out as one
     /// centred cluster — content pinned to opposite walls read as two
     /// unrelated things.
-    private static let clusterGap: CGFloat = 12
+    private static let clusterGap: CGFloat = 14
 
     /// Level history for the voice-memo waveform: newest sample on the right,
     /// scrolling left as speech continues — the shape of what was just said,
@@ -323,7 +329,7 @@ private final class IslandView: NSView {
         // Leaving the open state: content melts first, then the container
         // follows. Shrinking everything at once is what reads as "sudden" —
         // Apple's islands always retire the content a beat before the shape.
-        let contentLead: CFTimeInterval = leavingOpen ? 0.1 : 0
+        let contentLead: CFTimeInterval = leavingOpen ? Island.contentOutLead : 0
         for anim in [size, position, pathSpring, shadowSpring] {
             anim.beginTime = CACurrentMediaTime() + contentLead
             anim.fillMode = .backwards
@@ -368,11 +374,34 @@ private final class IslandView: NSView {
 
         // Content in: rides the container's spring. Content out: quick and
         // eased, ahead of the container (see layoutPill).
+        let animating = CATransaction.animationDuration() > 0
         if open {
+            // Fade + unfold on their own eased curve, delayed so the chin has
+            // begun to open before anything appears in it. Springing the
+            // opacity would make it flicker on the overshoot.
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = content.presentation()?.opacity ?? content.opacity
+            fade.toValue = 1
+            let unfold = CABasicAnimation(keyPath: "transform")
+            unfold.fromValue = content.presentation()?.transform ?? content.transform
+            unfold.toValue = CATransform3DIdentity
+            for a in [fade, unfold] {
+                a.duration = 0.3
+                a.beginTime = CACurrentMediaTime() + (animating ? Island.contentInDelay : 0)
+                a.fillMode = .backwards
+                a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             content.opacity = 1
             content.transform = CATransform3DIdentity
+            if animating {
+                content.add(fade, forKey: "opacity")
+                content.add(unfold, forKey: "transform")
+            }
+            CATransaction.commit()
         } else {
-            let out = CATransaction.animationDuration() > 0 ? 0.2 : 0
+            let out = animating ? Island.contentOutDuration : 0
             CATransaction.begin()
             CATransaction.setAnimationDuration(out)
             CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeIn))
