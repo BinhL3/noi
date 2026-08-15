@@ -197,12 +197,6 @@ private final class IslandView: NSView {
     private var waveTick: Timer?
     private var waveRect: CGRect = .zero
     private var lastReroll: TimeInterval = 0
-    /// Edge glow: a gradient beam along the island's open silhouette
-    /// (flanks and bottom, never the top edge), blurred soft, breathing with
-    /// the voice. Lives outside the pill's mask so it can spill past the edge.
-    private let glowHost = CALayer()
-    private let glowMask = CAShapeLayer()
-    private let glowGradient = CAGradientLayer()
     /// Elapsed time, right of the wave, as Voice Memos pairs them. Digits
     /// are monospaced so the label doesn't jitter as they tick.
     private let timer = CATextLayer()
@@ -227,8 +221,8 @@ private final class IslandView: NSView {
     private var timerTick: Timer?
     private var recordingStart: Date?
     private enum Wave {
-        static let totalWidth: CGFloat = 156
-        static let maxHeight: CGFloat = 30
+        static let totalWidth: CGFloat = 196
+        static let maxHeight: CGFloat = 46
         /// Points per wave path; constant so paths morph.
         static let samples = 48
         /// How often each layer picks a new random composition.
@@ -356,35 +350,6 @@ private final class IslandView: NSView {
             waveTargets.append(SiriWave.random(power: 0))
         }
 
-        // Edge glow: a big conic gradient, masked to a soft stroke of the
-        // open outline. Sibling of the pill (above it), unmasked, so the
-        // beam straddles the edge. Rides the pill's bounds/path springs.
-        glowHost.anchorPoint = CGPoint(x: 0.5, y: 1)
-        glowHost.opacity = 0
-        glowMask.anchorPoint = CGPoint(x: 0.5, y: 0)
-        glowMask.fillColor = NSColor.clear.cgColor
-        glowMask.strokeColor = NSColor.black.cgColor
-        glowMask.lineWidth = 5
-        glowMask.lineCap = .round
-        glowHost.mask = glowMask
-        glowGradient.type = .conic
-        glowGradient.startPoint = CGPoint(x: 0.5, y: 0.5)
-        glowGradient.endPoint = CGPoint(x: 1, y: 0.5)
-        glowGradient.colors = WavePalette.dictate.map { $0.withAlphaComponent(1).cgColor } + [WavePalette.dictate[0].withAlphaComponent(1).cgColor]
-        glowGradient.frame = CGRect(x: -500, y: -420, width: 1000, height: 1000)
-        glowHost.addSublayer(glowGradient)
-        if let blur = CIFilter(name: "CIGaussianBlur") {
-            blur.name = "blur"
-            blur.setValue(3, forKey: kCIInputRadiusKey)
-            glowHost.filters = [blur]
-        }
-        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
-        spin.fromValue = 0
-        spin.toValue = 2 * Double.pi
-        spin.duration = 6
-        spin.repeatCount = .infinity
-        glowGradient.add(spin, forKey: "spin")
-        layer?.addSublayer(glowHost)
 
         glyphRing.fillColor = NSColor.clear.cgColor
         glyphRing.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
@@ -496,11 +461,6 @@ private final class IslandView: NSView {
             }
             clip.path = targetPath
             rim.path = path(for: target.size, s, closed: false)
-            glowHost.position = pillTop
-            glowHost.bounds = targetBounds
-            glowMask.position = .zero
-            glowMask.bounds = targetBounds
-            glowMask.path = rim.path
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
             layoutContents(s)
@@ -556,12 +516,6 @@ private final class IslandView: NSView {
         clip.add(pathSpring, forKey: "path")
         rim.path = rimPath
         rim.add(rimSpring, forKey: "path")
-        glowHost.bounds = targetBounds
-        glowHost.add(boundsSpring, forKey: "bounds")
-        glowMask.bounds = targetBounds
-        glowMask.add(boundsSpring, forKey: "bounds")
-        glowMask.path = rimPath
-        glowMask.add(rimSpring, forKey: "path")
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.bounds = targetBounds
         shadowLayer.shadowPath = targetPath
@@ -644,7 +598,6 @@ private final class IslandView: NSView {
             content.setValue(Island.contentOutBlur, forKeyPath: "filters.blur.inputRadius")
             CATransaction.commit()
             wavePowerTarget = 0
-            glowHost.opacity = 0
         }
 
         layoutCluster(in: chinSize)
@@ -672,7 +625,6 @@ private final class IslandView: NSView {
         }
         let palette = mode == .instruct ? WavePalette.instruct : WavePalette.dictate
         for (i, wave) in waveLayers.enumerated() { wave.fillColor = palette[i].cgColor }
-        glowGradient.colors = palette.map { $0.withAlphaComponent(1).cgColor } + [palette[0].withAlphaComponent(1).cgColor]
         // The clock reads in white beside a coloured wave; the record glyph
         // keeps its red — the one universally understood "recording" cue.
         timer.foregroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
@@ -869,10 +821,9 @@ private final class IslandView: NSView {
         CATransaction.begin()
         CATransaction.setAnimationDuration(Self.releaseSettle)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
-        // The wave drains to a still line while the glow dies; the tick keeps
+        // The wave drains to a still line; the tick keeps
         // running through the settle so the drain is drawn, not cut.
         wavePowerTarget = 0
-        glowHost.opacity = 0
         for wave in waveLayers { wave.opacity = 0.35 }
         timer.opacity = 0
         glyphRing.opacity = 0
@@ -883,15 +834,13 @@ private final class IslandView: NSView {
     }
 
     /// Mic level, 0...1, at ~24 Hz. Sets the wave's power target and the
-    /// glow's breath; the 30 Hz tick eases toward them.
+    /// the 30 Hz tick eases toward it.
     func setLevel(_ level: CGFloat) {
         // Levels can trail the stop by a few callbacks; once the mode has left
         // recording they must not fight the wave's settle.
         guard state == .open, mode.isRecording else { return }
         let l = max(0, min(level, 1))
         wavePowerTarget = Wave.idlePower + (1 - Wave.idlePower) * l
-        // Glow breathes: floor so it is always faintly there while recording.
-        glowHost.opacity = Float(0.25 + 0.75 * l)
     }
 
     /// One frame of wave motion: ease power and each layer's composition
