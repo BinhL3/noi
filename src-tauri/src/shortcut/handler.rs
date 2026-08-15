@@ -55,9 +55,7 @@ pub fn handle_shortcut_event(
     // The refine key reads taps, not holds; see refine_gesture.
     #[cfg(target_os = "macos")]
     if binding_id == "refine_selection" {
-        if is_pressed {
-            crate::refine_gesture::press(app, binding_id, hotkey_string);
-        }
+        crate::refine_gesture::event(app, binding_id, hotkey_string, is_pressed);
         return;
     }
 

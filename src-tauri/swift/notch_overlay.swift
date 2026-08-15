@@ -415,7 +415,6 @@ private final class IslandView: NSView {
             shape.add(innerPosition, forKey: "position")
             shape.add(pathSpring, forKey: "path")
         }
-        content.add(contentPosition, forKey: "position")
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.frame = target
         shadowLayer.shadowPath = targetPath
@@ -424,6 +423,11 @@ private final class IslandView: NSView {
         shadowLayer.add(position, forKey: "position")
         shadowLayer.add(shadowSpring, forKey: "shadowPath")
         layoutContents(in: target, s)
+        // AFTER layoutContents: it sets content.position, and a property set
+        // installs an implicit animation under the same "position" key that
+        // would replace this spring. Content easing while the pill springs
+        // showed as the cluster sliding a couple of pixels mid-transition.
+        content.add(contentPosition, forKey: "position")
         CATransaction.commit()
     }
 

@@ -1,119 +1,119 @@
-//! Tap grammar for the refine-on-selection key.
+//! Gesture grammar for the refine-on-selection key.
 //!
-//! The binding used to be press-and-hold: hold, say nothing, release → refine;
-//! hold, speak, release → apply the instruction. Holding a modifier while
-//! thinking of an instruction is awkward, and a silent hold is a slow way to
-//! say "just fix it". So the key now reads taps instead, all on key press:
+//! - tap                    → refine the selection now, no recording
+//! - tap, then press-and-hold → record an instruction while held;
+//!                            release → stop and apply it
 //!
-//! - idle, one tap        → refine the selection now, no recording
-//! - idle, two taps       → start recording an instruction
-//! - recording, one tap   → stop and apply the instruction
-//! - recording, two taps  → cancel
+//! Cancel is Handy's cancel binding (Escape), as for any recording.
 //!
-//! "One tap" is only known once the double-tap window has passed with no
-//! second press, so the single-tap actions run `TAP_WINDOW` late. For refine
-//! that is invisible next to the LLM call; for stop it adds a beat of silence
-//! to the recording, which transcription ignores.
+//! A tap is only known to be a lone tap once the double-tap window has passed
+//! with no second press, so refine runs `TAP_WINDOW` late — invisible next to
+//! the LLM call. A second press inside the window starts recording at once,
+//! and its release ends it. A quick double tap therefore records ~nothing,
+//! which the pipeline treats as a silent refine — the same result as one tap.
 //!
-//! State is a press timestamp and a generation counter: each press bumps the
-//! generation, and a deferred single-tap action only fires if the generation
-//! it captured is still current when its window closes.
+//! State is a press timestamp, a "holding" flag, and a generation counter:
+//! each press bumps the generation, and the deferred refine only fires if the
+//! generation it captured is still current when its window closes.
 
 use log::{debug, warn};
 use once_cell::sync::Lazy;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::actions::{capture_refine_selection, refine_selection_now, ACTION_MAP};
-use crate::managers::audio::AudioRecordingManager;
-use crate::utils;
 
-/// Two presses closer than this are one double tap.
+/// Two presses closer than this are one gesture.
 const TAP_WINDOW: Duration = Duration::from_millis(300);
 
 struct Gesture {
     last_press: Option<Instant>,
+    /// The second press is down and recording; its release stops.
+    holding: bool,
     generation: u64,
 }
 
 static GESTURE: Lazy<Mutex<Gesture>> = Lazy::new(|| {
     Mutex::new(Gesture {
         last_press: None,
+        holding: false,
         generation: 0,
     })
 });
 
-/// Handle a press of the refine key. Releases are not needed by this grammar
-/// and the caller does not forward them.
-pub fn press(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
-    let recording = app
-        .try_state::<Arc<AudioRecordingManager>>()
-        .is_some_and(|a| a.is_recording());
+pub fn event(app: &AppHandle, binding_id: &str, hotkey_string: &str, is_pressed: bool) {
+    if is_pressed {
+        press(app, binding_id, hotkey_string);
+    } else {
+        release(app, binding_id, hotkey_string);
+    }
+}
 
-    let (double, generation) = {
+fn press(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
+    let (second, generation) = {
         let Ok(mut g) = GESTURE.lock() else { return };
+        if g.holding {
+            // Autorepeat while held, or a re-press we cannot make sense of.
+            return;
+        }
         let now = Instant::now();
-        let double = g
+        let second = g
             .last_press
             .is_some_and(|t| now.duration_since(t) < TAP_WINDOW);
-        // A double tap consumes both presses; a third quick press starts over.
-        g.last_press = if double { None } else { Some(now) };
+        g.last_press = if second { None } else { Some(now) };
         g.generation += 1;
-        (double, g.generation)
+        if second {
+            g.holding = true;
+        }
+        (second, g.generation)
     };
 
+    if second {
+        debug!("Refine gesture: second press → recording an instruction while held");
+        let Some(action) = ACTION_MAP.get(binding_id) else {
+            warn!("No action in ACTION_MAP for '{binding_id}'");
+            return;
+        };
+        // start() captures the selection itself; the first press's copy is
+        // still valid but re-copying is harmless and keeps start() whole.
+        action.start(app, binding_id, hotkey_string);
+        return;
+    }
+
+    // First press: copy now, while the selection certainly still exists, and
+    // decide what to do with it once the window closes.
+    if !capture_refine_selection(app) {
+        if let Ok(mut g) = GESTURE.lock() {
+            g.last_press = None;
+        }
+        return;
+    }
+    debug!("Refine gesture: tap → refine once the window closes");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(TAP_WINDOW);
+        if GESTURE
+            .lock()
+            .is_ok_and(|g| g.generation == generation && !g.holding)
+        {
+            refine_selection_now(&app);
+        }
+    });
+}
+
+fn release(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
+    let was_holding = {
+        let Ok(mut g) = GESTURE.lock() else { return };
+        std::mem::replace(&mut g.holding, false)
+    };
+    if !was_holding {
+        return;
+    }
+    debug!("Refine gesture: released → stop and apply the instruction");
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-
-    match (recording, double) {
-        (true, true) => {
-            debug!("Refine gesture: double tap while recording → cancel");
-            utils::cancel_current_operation(app);
-        }
-        (true, false) => {
-            debug!("Refine gesture: tap while recording → stop after window");
-            let app = app.clone();
-            let action = Arc::clone(action);
-            let binding_id = binding_id.to_string();
-            let hotkey_string = hotkey_string.to_string();
-            std::thread::spawn(move || {
-                std::thread::sleep(TAP_WINDOW);
-                if is_current(generation) {
-                    action.stop(&app, &binding_id, &hotkey_string);
-                }
-            });
-        }
-        (false, true) => {
-            debug!("Refine gesture: double tap → record an instruction");
-            // start() captures the selection itself (again — the first tap's
-            // copy is still valid, but re-copying is harmless and keeps start()
-            // self-contained).
-            action.start(app, binding_id, hotkey_string);
-        }
-        (false, false) => {
-            // Copy now, while the selection certainly still exists; decide
-            // what to do with it once the window closes.
-            if !capture_refine_selection(app) {
-                if let Ok(mut g) = GESTURE.lock() {
-                    g.last_press = None;
-                }
-                return;
-            }
-            debug!("Refine gesture: tap → refine after window");
-            let app = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(TAP_WINDOW);
-                if is_current(generation) {
-                    refine_selection_now(&app);
-                }
-            });
-        }
-    }
-}
-
-fn is_current(generation: u64) -> bool {
-    GESTURE.lock().is_ok_and(|g| g.generation == generation)
+    action.stop(app, binding_id, hotkey_string);
 }
