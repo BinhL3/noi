@@ -2,23 +2,20 @@
 
 **Voice in, finished text out — from the notch.**
 
-Noi is a macOS dictation app built on [Handy](https://github.com/cjpais/Handy). Press a key, speak, and clean text lands wherever your cursor is. Everything runs on your machine: local speech-to-text, and a small local language model that tidies what you said before it is pasted.
+Noi is a macOS dictation app. Hold a key, speak, release: the text lands wherever your cursor is. Select any text and tap a second key to have it cleaned up in place — or hold and say what to change.
 
-What it adds to Handy:
+Built on [Handy](https://github.com/cjpais/Handy).
 
-- **A native Dynamic-Island overlay** that grows out of the camera housing. Pure CALayer + `CASpringAnimation` (no webview), so it moves the way the iPhone's does: one spring, content revealed by the shape, hover-to-peek at rest.
-- **Refine on selection.** Select any text and *tap* the refine key to have the local model clean it up in place. *Tap, then hold* to speak an instruction ("make this a bullet list", "shorter") and it is applied to the selection when you release.
-- **Apple Speech as an engine** on macOS 26: Apple's own on-device recogniser (`SpeechAnalyzer`), nothing to download, ~100 ms warm for a sentence. Pick it in the model list next to Nemotron, Parakeet and Whisper.
-- **A local model as the default post-processor** (Ollama, `qwen2.5:3b-instruct`), chosen by an [eval against real transcripts](eval/README.md). Cloud providers are opt-in.
-- **Nothing dictated is ever lost.** If no text field takes the paste, the transcript stays on the clipboard.
+- **The notch is the UI.** A native Dynamic-Island overlay grows out of the camera housing — one spring, content revealed by the shape, hover to peek. Pure CALayer, no webview.
+- **On-device by default.** Apple Speech (`SpeechAnalyzer`, macOS 26) transcribes with nothing to download, ~0.2 s for a sentence. Nemotron, Parakeet and Whisper are one click away.
+- **Refine on selection.** Tap the refine key to clean up selected text; tap-and-hold to speak an instruction ("make this a list", "shorter"). Bring your own model key, or run Ollama locally.
+- **Never lose a dictation.** No text field to paste into? It stays on the clipboard.
 
-Everything Handy does — models, shortcuts, history, push-to-talk, VAD, Windows/Linux builds — is still here; see [docs/HANDY_README.md](docs/HANDY_README.md).
+## Install
 
-## Status
+Requires macOS 26 on Apple Silicon for the notch overlay and Apple Speech; other Macs fall back to Handy's overlay and models.
 
-Personal fork, actively iterated, macOS-first. Roadmap and design notes: [PLAN.md](PLAN.md), [docs/research/notch-ui-design.md](docs/research/notch-ui-design.md).
-
-Next: compound intents ("play some music and note down my next idea, remind me") split into fire-and-forget actions with a visible undo — notes as a byproduct — and a companion iPhone app sharing state.
+Grab the `.dmg` from [Releases](https://github.com/BinhL3/noi/releases). If macOS says the app is damaged (unsigned build): `xattr -d com.apple.quarantine /Applications/Noi.app`.
 
 ## Build
 
@@ -28,10 +25,6 @@ bun install
 bun run tauri dev
 ```
 
-Requires macOS 12+ for the notch overlay (falls back to Handy's overlay on other displays). Ollama at `http://localhost:11434` for local refine: `ollama pull qwen2.5:3b-instruct`. Full platform notes in [BUILD.md](BUILD.md); contributor conventions in [AGENTS.md](AGENTS.md).
+## Credits
 
-## Credit
-
-Built on [Handy](https://github.com/cjpais/Handy) by CJ Pais and contributors, MIT licensed. Noi keeps the same license — see [LICENSE](LICENSE).
-
-The Apple Speech engine follows [Talkify](https://github.com/tornikegomareli/Talkify) by Tornike Gomareli, which showed how fast `SpeechAnalyzer` is on the Neural Engine and that a dictation app can be entirely on-device.
+[Handy](https://github.com/cjpais/Handy) by CJ Pais and contributors (MIT) is the foundation. [Talkify](https://github.com/tornikegomareli/Talkify) by Tornike Gomareli showed how fast Apple's on-device recogniser is. Design notes and roadmap: [PLAN.md](PLAN.md), [docs/](docs/). MIT — see [LICENSE](LICENSE).

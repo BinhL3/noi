@@ -858,9 +858,9 @@ impl ShortcutAction for TranscribeAction {
         play_feedback_sound(app, SoundType::Stop);
 
         let binding_id = binding_id.to_string(); // Clone binding_id for the async task
-        // Plain dictation is never refined: it pastes raw and fast. Refining
-        // is for text the user selects (tap the refine key), or the dedicated
-        // post-process shortcut.
+                                                 // Plain dictation is never refined: it pastes raw and fast. Refining
+                                                 // is for text the user selects (tap the refine key), or the dedicated
+                                                 // post-process shortcut.
         let post_process = self.post_process;
         let cancel_generation = rm.cancel_generation();
 

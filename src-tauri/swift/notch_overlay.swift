@@ -31,7 +31,9 @@ enum IslandState {
 enum IslandMode: Equatable {
     case dictate
     case instruct
-    case working(String)
+    /// Label plus the SF Symbol that says which kind of work: transcribing
+    /// shows a waveform (speech becoming text), refining the sparkle.
+    case working(String, symbol: String)
     case done(ok: Bool)
 
     var isRecording: Bool { self == .dictate || self == .instruct }
@@ -626,7 +628,7 @@ private final class IslandView: NSView {
         switch mode {
         case .dictate: symbolName = ""
         case .instruct: symbolName = "sparkles"
-        case .working(let s): symbolName = "sparkles"; text = s
+        case .working(let s, let sym): symbolName = sym; text = s
         case .done(let ok): symbolName = ok ? "" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
         }
         if !symbolName.isEmpty {
@@ -1105,8 +1107,8 @@ public func notch_overlay_set_mode(_ mode: Int32) {
     let m: IslandMode
     switch mode {
     case 1: m = .instruct
-    case 2: m = .working("Transcribing…")
-    case 3: m = .working("Refining…")
+    case 2: m = .working("Transcribing…", symbol: "waveform")
+    case 3: m = .working("Refining…", symbol: "sparkles")
     default: m = .dictate
     }
     DispatchQueue.main.async { IslandController.shared.setMode(m) }

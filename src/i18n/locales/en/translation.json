@@ -556,7 +556,7 @@
         "title": "Keyboard Diagnostic",
         "description": "Checks whether keyboard events reach Noi. Only event counts are recorded — never which keys you press.",
         "run": "Run 10s diagnostic",
-        "running": "Listening… press your shortcut a few times (e.g. Option+Space)",
+        "running": "Listening… press your shortcut a few times (e.g. Right Option)",
         "secureInputLabel": "Secure Input",
         "enabled": "enabled",
         "disabled": "disabled",
