@@ -17,6 +17,8 @@ unsafe extern "C" {
     fn notch_overlay_prepare();
     fn notch_overlay_show();
     fn notch_overlay_hide();
+    fn notch_overlay_set_mode(mode: i32);
+    fn notch_overlay_finish(ok: i32);
     fn notch_overlay_set_level(level: f32);
 }
 
@@ -52,6 +54,33 @@ pub fn hide() {
         return;
     }
     unsafe { notch_overlay_hide() }
+}
+
+/// What the open island is showing. Mirrors `IslandMode` on the Swift side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum Mode {
+    Dictate = 0,
+    Instruct = 1,
+    Transcribing = 2,
+    Refining = 3,
+}
+
+/// Set before `show()` for a fresh open, or while open to cross-fade.
+pub fn set_mode(mode: Mode) {
+    if !is_available() {
+        return;
+    }
+    unsafe { notch_overlay_set_mode(mode as i32) }
+}
+
+/// Show the outcome (✓ / ✗) for a beat, then close. Replaces `hide()` at the
+/// end of an operation the user should see the result of.
+pub fn finish(ok: bool) {
+    if !is_available() {
+        return;
+    }
+    unsafe { notch_overlay_finish(ok as i32) }
 }
 
 /// Microphone level, clamped to 0.0..=1.0.

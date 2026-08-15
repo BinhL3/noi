@@ -462,8 +462,18 @@ pub(crate) fn capture_refine_selection(app: &AppHandle) -> bool {
 pub(crate) fn refine_selection_now(app: &AppHandle) {
     let ah = app.clone();
     tauri::async_runtime::spawn(async move {
-        refine_selection_silently(&ah).await;
-        utils::hide_recording_overlay(&ah);
+        let ok = refine_selection_silently(&ah).await;
+        // A tap-refine has no recording to watch, so the outcome IS the
+        // feedback: the island shows ✓ (or ✗) for a beat and closes itself.
+        let settings = get_settings(&ah);
+        if settings.overlay_style != OverlayStyle::None
+            && settings.overlay_position == crate::settings::OverlayPosition::Top
+            && crate::native_notch::is_available()
+        {
+            crate::native_notch::finish(ok);
+        } else {
+            utils::hide_recording_overlay(&ah);
+        }
     });
 }
 
@@ -473,9 +483,9 @@ pub(crate) fn refine_selection_now(app: &AppHandle) {
 /// This lives outside the normal transcription pipeline because that pipeline
 /// bails on empty audio long before post-processing runs.
 #[cfg(target_os = "macos")]
-async fn refine_selection_silently(app: &AppHandle) {
+async fn refine_selection_silently(app: &AppHandle) -> bool {
     let Some(selection) = PENDING_SELECTION.lock().ok().and_then(|mut s| s.take()) else {
-        return;
+        return false;
     };
 
     debug!(
@@ -493,12 +503,21 @@ async fn refine_selection_silently(app: &AppHandle) {
     .await
     {
         Some(refined) => match utils::paste(refined, app.clone()) {
-            Ok(()) => debug!("Refine-on-selection: pasted refined selection"),
-            Err(e) => error!("Refine-on-selection: paste failed: {e}"),
+            Ok(()) => {
+                debug!("Refine-on-selection: pasted refined selection");
+                true
+            }
+            Err(e) => {
+                error!("Refine-on-selection: paste failed: {e}");
+                false
+            }
         },
         // Leave the user's text alone rather than pasting the selection back
         // over itself: with nothing to change, doing nothing is the safe move.
-        None => warn!("Refine-on-selection: post-processing unavailable, leaving text untouched"),
+        None => {
+            warn!("Refine-on-selection: post-processing unavailable, leaving text untouched");
+            false
+        }
     }
 }
 
@@ -692,6 +711,12 @@ impl ShortcutAction for TranscribeAction {
             OverlayStyle::Live | OverlayStyle::Minimal => show_recording_overlay(app),
             OverlayStyle::None => {} // show_overlay_state no-ops on None anyway
         }
+        // What is said now is an instruction, not text; the island shows it
+        // in the instruction colour so the user knows which mode they are in.
+        #[cfg(target_os = "macos")]
+        if self.use_selection && settings.overlay_style != OverlayStyle::None {
+            crate::native_notch::set_mode(crate::native_notch::Mode::Instruct);
+        }
         // Everything above runs before capture can begin, so each span here is
         // added keypress->capture latency.
         debug!(
@@ -870,7 +895,7 @@ impl ShortcutAction for TranscribeAction {
                     // selection cleaned up. Handy discards empty audio before
                     // post-processing, so the refine has to happen here.
                     #[cfg(target_os = "macos")]
-                    refine_selection_silently(&ah).await;
+                    let _ = refine_selection_silently(&ah).await;
 
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);

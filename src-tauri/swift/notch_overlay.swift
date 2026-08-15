@@ -23,6 +23,19 @@ enum IslandState {
     case closed, peek, open
 }
 
+/// What the open island is FOR. The shape is the same; the content and tint
+/// say which. Dictation is Voice Memos red; an instruction is violet — the
+/// system's colour for "intelligence" — so the user can tell at a glance that
+/// what they say next is a command, not text.
+enum IslandMode: Equatable {
+    case dictate
+    case instruct
+    case working(String)
+    case done(ok: Bool)
+
+    var isRecording: Bool { self == .dictate || self == .instruct }
+}
+
 /// Numbers come from docs/research/notch-ui-design.md §5: they are what
 /// boring.notch and DynamicNotchKit ship, checked against Apple's HIG.
 private enum Island {
@@ -154,6 +167,12 @@ private final class IslandView: NSView {
     /// white ring. It is the one glyph that says "recording" without a word.
     private let glyphRing = CAShapeLayer()
     private let glyphSquare = CALayer()
+    /// SF Symbol glyphs for the non-dictation modes: sparkles for instruct
+    /// and working, a check or an x for done.
+    private let symbol = CALayer()
+    /// Status text for working/done ("Refining…", "Done").
+    private let label = CATextLayer()
+    private(set) var mode: IslandMode = .dictate
     private var timerTick: Timer?
     private var recordingStart: Date?
     private enum Wave {
@@ -173,7 +192,16 @@ private final class IslandView: NSView {
         static let font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .medium)
         static let width: CGFloat = 40
     }
+    private enum Tint {
+        /// Voice Memos red.
+        static let dictate = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
+        /// systemPurple, the "intelligence" hue.
+        static let instruct = NSColor(red: 0.75, green: 0.35, blue: 0.95, alpha: 1)
+        static let ok = NSColor(red: 0.19, green: 0.82, blue: 0.35, alpha: 1)
+        static let fail = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
+    }
     private enum Glyph {
+        static let symbolSize: CGFloat = 20
         static let ringDiameter: CGFloat = 22
         static let ringWidth: CGFloat = 1.5
         static let squareSide: CGFloat = 9
@@ -247,6 +275,18 @@ private final class IslandView: NSView {
         glyphSquare.backgroundColor = Wave.tint.cgColor
         glyphSquare.cornerRadius = Glyph.squareRadius
         content.addSublayer(glyphSquare)
+
+        symbol.contentsGravity = .resizeAspect
+        symbol.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        content.addSublayer(symbol)
+
+        label.font = Text.font
+        label.fontSize = Text.font.pointSize
+        label.foregroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
+        label.alignmentMode = .left
+        label.truncationMode = .end
+        label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        content.addSublayer(label)
 
         timer.string = "0:00"
         timer.font = Text.font
@@ -452,35 +492,142 @@ private final class IslandView: NSView {
             CATransaction.commit()
         }
 
-        // One centred cluster: glyph · wave · time.
-        let gap = Self.clusterGap
-        let clusterWidth = Glyph.ringDiameter + gap + Wave.totalWidth + gap + Text.width
-        var x = (chinSize.width - clusterWidth) / 2
-        let midY = chinSize.height / 2
+        layoutCluster(in: chinSize)
+    }
 
-        let ringRect = CGRect(x: x, y: midY - Glyph.ringDiameter / 2, width: Glyph.ringDiameter, height: Glyph.ringDiameter)
-        glyphRing.frame = ringRect
-        glyphRing.path = CGPath(ellipseIn: CGRect(origin: .zero, size: ringRect.size).insetBy(dx: Glyph.ringWidth / 2, dy: Glyph.ringWidth / 2), transform: nil)
+    /// One centred cluster, whose members depend on the mode:
+    ///   dictate:  (■) · wave · 0:07          red
+    ///   instruct:  ✦  · wave · 0:07          violet
+    ///   working:   ✦  · "Refining…"          breathing
+    ///   done:      ✓  · "Done"               green, then close
+    private func layoutCluster(in chinSize: CGSize) {
+        let gap = Self.clusterGap
+        let midY = chinSize.height / 2
+        let textHeight = ceil(Text.font.ascender - Text.font.descender)
+        let recording = mode.isRecording
+        let usesRing = mode == .dictate
+
+        // Tint everything that carries the mode colour.
+        let tint: NSColor
+        switch mode {
+        case .dictate: tint = Tint.dictate
+        case .instruct: tint = Tint.instruct
+        case .working: tint = Tint.instruct
+        case .done(let ok): tint = ok ? Tint.ok : Tint.fail
+        }
+        for bar in bars { bar.backgroundColor = tint.cgColor }
+        timer.foregroundColor = tint.cgColor
+        glyphSquare.backgroundColor = tint.cgColor
+
+        // Which members are present.
+        glyphRing.isHidden = !usesRing
+        glyphSquare.isHidden = !usesRing
+        symbol.isHidden = usesRing
+        for bar in bars { bar.isHidden = !recording }
+        timer.isHidden = !recording
+        label.isHidden = recording
+
+        // Symbol image + label text for the mode.
+        let symbolName: String
+        var text = ""
+        switch mode {
+        case .dictate: symbolName = ""
+        case .instruct: symbolName = "sparkles"
+        case .working(let s): symbolName = "sparkles"; text = s
+        case .done(let ok): symbolName = ok ? "checkmark.circle.fill" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
+        }
+        if !symbolName.isEmpty {
+            symbol.contents = symbolImage(symbolName, size: Glyph.symbolSize, color: tint)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        label.string = text
+        CATransaction.commit()
+
+        // Measure the cluster.
+        let glyphWidth = usesRing ? Glyph.ringDiameter : Glyph.symbolSize
+        let labelWidth = text.isEmpty ? 0 : ceil((text as NSString).size(withAttributes: [.font: Text.font]).width) + 2
+        let clusterWidth = glyphWidth + gap + (recording ? Wave.totalWidth + gap + Text.width : labelWidth)
+        var x = (chinSize.width - clusterWidth) / 2
+
+        // Glyph.
+        let glyphRect = CGRect(x: x, y: midY - glyphWidth / 2, width: glyphWidth, height: glyphWidth)
+        glyphRing.frame = glyphRect
+        glyphRing.path = CGPath(ellipseIn: CGRect(origin: .zero, size: glyphRect.size).insetBy(dx: Glyph.ringWidth / 2, dy: Glyph.ringWidth / 2), transform: nil)
         glyphSquare.frame = CGRect(
-            x: ringRect.midX - Glyph.squareSide / 2,
-            y: ringRect.midY - Glyph.squareSide / 2,
+            x: glyphRect.midX - Glyph.squareSide / 2,
+            y: glyphRect.midY - Glyph.squareSide / 2,
             width: Glyph.squareSide,
             height: Glyph.squareSide
         )
-        x += Glyph.ringDiameter + gap
+        symbol.frame = glyphRect
+        x += glyphWidth + gap
 
-        for (i, bar) in bars.enumerated() {
-            // frame-setting resets anchored position, so place via bounds+position.
-            bar.bounds = CGRect(x: 0, y: 0, width: Wave.barWidth, height: Wave.maxHeight)
-            bar.position = CGPoint(
-                x: x + CGFloat(i) * (Wave.barWidth + Wave.gap) + Wave.barWidth / 2,
-                y: midY
-            )
+        if recording {
+            for (i, bar) in bars.enumerated() {
+                // frame-setting resets anchored position, so place via bounds+position.
+                bar.bounds = CGRect(x: 0, y: 0, width: Wave.barWidth, height: Wave.maxHeight)
+                bar.position = CGPoint(
+                    x: x + CGFloat(i) * (Wave.barWidth + Wave.gap) + Wave.barWidth / 2,
+                    y: midY
+                )
+            }
+            x += Wave.totalWidth + gap
+            timer.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: Text.width, height: textHeight)
+        } else {
+            label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
         }
-        x += Wave.totalWidth + gap
 
-        let textHeight = ceil(Text.font.ascender - Text.font.descender)
-        timer.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: Text.width, height: textHeight)
+        // Working: the sparkle breathes so a long LLM call still reads as alive.
+        if case .working = mode {
+            if symbol.animation(forKey: "breathe") == nil {
+                let breathe = CABasicAnimation(keyPath: "opacity")
+                breathe.fromValue = 1
+                breathe.toValue = 0.35
+                breathe.duration = 0.8
+                breathe.autoreverses = true
+                breathe.repeatCount = .infinity
+                breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                symbol.add(breathe, forKey: "breathe")
+            }
+        } else {
+            symbol.removeAnimation(forKey: "breathe")
+        }
+    }
+
+    /// A tinted SF Symbol as a CGImage, at 2x for Retina.
+    private func symbolImage(_ name: String, size: CGFloat, color: NSColor) -> CGImage? {
+        guard #available(macOS 12.0, *) else { return nil }
+        let base = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        let config = NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        guard let image = base?.withSymbolConfiguration(config) else { return nil }
+        var rect = CGRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }
+
+    /// Switch what the open island shows. Content cross-fades within the same
+    /// shape; the shape itself does not move.
+    func setMode(_ m: IslandMode) {
+        guard m != mode else { return }
+        let wasRecording = mode.isRecording
+        mode = m
+        if m.isRecording {
+            if !wasRecording { startRecording() }
+        } else {
+            stopRecording()
+        }
+        let chinSize = CGSize(width: pillFrame(.open).width, height: Island.chinHeight(.open))
+        if state == .open {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.22
+            content.add(fade, forKey: "mode")
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layoutCluster(in: chinSize)
+        CATransaction.commit()
     }
 
     /// Mic level, 0...1, at ~24 Hz. Voice-memo style: the new sample enters on
@@ -667,13 +814,34 @@ private final class IslandController {
         _ = ensurePanel()
     }
 
+    /// Open the island. Idempotent while open: the pipeline calls this again
+    /// for each phase (recording → transcribing → processing), and re-opening
+    /// would restart the timer and re-run the reveal.
     func show() {
         guard let (_, view) = ensurePanel() else { return }
-        recording = true
         pendingPeek?.cancel()
         pendingUnpeek?.cancel()
-        view.startRecording()
+        guard !recording else { return }
+        recording = true
+        if view.mode.isRecording { view.startRecording() }
         view.layoutPill(.open, animated: true)
+    }
+
+    func setMode(_ m: IslandMode) {
+        guard let (_, view) = ensurePanel() else { return }
+        view.setMode(m)
+    }
+
+    /// Show the outcome for a beat, then close. Opens first if needed, so a
+    /// tap-refine that never recorded still gets its "Done".
+    func finish(ok: Bool) {
+        guard let (_, view) = ensurePanel() else { return }
+        view.setMode(.done(ok: ok))
+        show()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, self.view?.mode == .done(ok: ok) else { return }
+            self.hide()
+        }
     }
 
     func hide() {
@@ -713,6 +881,26 @@ public func notch_overlay_prepare() {
 @_cdecl("notch_overlay_show")
 public func notch_overlay_show() {
     DispatchQueue.main.async { IslandController.shared.show() }
+}
+
+/// 0 dictate, 1 instruct, 2 transcribing, 3 refining. Call before show() for
+/// a fresh open, or while open to cross-fade the content.
+@_cdecl("notch_overlay_set_mode")
+public func notch_overlay_set_mode(_ mode: Int32) {
+    let m: IslandMode
+    switch mode {
+    case 1: m = .instruct
+    case 2: m = .working("Transcribing…")
+    case 3: m = .working("Refining…")
+    default: m = .dictate
+    }
+    DispatchQueue.main.async { IslandController.shared.setMode(m) }
+}
+
+/// Show ✓ Done (or ✗) briefly, then close.
+@_cdecl("notch_overlay_finish")
+public func notch_overlay_finish(_ ok: Int32) {
+    DispatchQueue.main.async { IslandController.shared.finish(ok: ok != 0) }
 }
 
 @_cdecl("notch_overlay_hide")

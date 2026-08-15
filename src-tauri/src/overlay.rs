@@ -543,6 +543,13 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
     // animates on the GPU, and running both would show two overlays.
     #[cfg(target_os = "macos")]
     if settings.overlay_position == OverlayPosition::Top && crate::native_notch::is_available() {
+        use crate::native_notch::Mode;
+        let mode = match state {
+            "transcribing" => Mode::Transcribing,
+            "processing" => Mode::Refining,
+            _ => Mode::Dictate,
+        };
+        crate::native_notch::set_mode(mode);
         crate::native_notch::show();
         return;
     }
