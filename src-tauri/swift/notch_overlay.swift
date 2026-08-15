@@ -13,6 +13,7 @@
 
 import AppKit
 import QuartzCore
+import CoreImage
 
 // MARK: - Geometry
 
@@ -73,18 +74,22 @@ private enum Island {
     /// Springs as Apple specifies them (WWDC23 "Animate with springs"):
     /// perceptual duration + bounce, converted to CA's mass/stiffness/damping.
     /// Growing carries a small bounce so it reads as physical; shrinking is
-    /// critically damped because springing back shut looks indecisive.
+    /// nearly critically damped — a bounce on the way shut looks indecisive.
     static let growDuration: CFTimeInterval = 0.55
     static let growBounce: CGFloat = 0.15
     static let shrinkDuration: CFTimeInterval = 0.5
-    static let shrinkBounce: CGFloat = 0
+    /// A hint of bounce on the way shut — enough that the collapse reads as
+    /// the island settling into the housing, not enough to look indecisive.
+    static let shrinkBounce: CGFloat = 0.08
     /// Content appears a beat after the shape starts moving, once there is
     /// room for it, and leaves a beat before the shape shrinks. Both are what
     /// separates a morph from a pop.
     static let contentInDelay: CFTimeInterval = 0.14
     static let contentInDuration: CFTimeInterval = 0.34
-    static let contentOutDuration: CFTimeInterval = 0.22
-    static let contentOutLead: CFTimeInterval = 0.12
+    static let contentOutDuration: CFTimeInterval = 0.32
+    static let contentOutLead: CFTimeInterval = 0.06
+    /// Content blurs as it leaves, the way iOS island content does.
+    static let contentOutBlur: CGFloat = 8
 
     /// Hover: dwell before the peek, grace after the pointer leaves, and how
     /// far outside the pill still counts as "on it" (larger once lifted so a
@@ -298,6 +303,11 @@ private final class IslandView: NSView {
         layer?.addSublayer(pill)
 
         content.anchorPoint = CGPoint(x: 0.5, y: 1) // scale from the housing edge
+        if let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.name = "blur"
+            blur.setValue(0, forKey: kCIInputRadiusKey)
+            content.filters = [blur]
+        }
         content.opacity = 0
         pill.addSublayer(content)
 
@@ -519,18 +529,31 @@ private final class IslandView: NSView {
             CATransaction.setDisableActions(true)
             content.opacity = 1
             content.transform = CATransform3DIdentity
+            content.setValue(0, forKeyPath: "filters.blur.inputRadius")
             if animating {
+                let unblur = CABasicAnimation(keyPath: "filters.blur.inputRadius")
+                unblur.fromValue = Island.contentOutBlur
+                unblur.toValue = 0
+                unblur.duration = fade.duration
+                unblur.beginTime = fade.beginTime
+                unblur.fillMode = .backwards
+                unblur.timingFunction = fade.timingFunction
                 content.add(fade, forKey: "opacity")
                 content.add(unfold, forKey: "transform")
+                content.add(unblur, forKey: "blur")
             }
             CATransaction.commit()
         } else {
             let out = animating ? Island.contentOutDuration : 0
             CATransaction.begin()
             CATransaction.setAnimationDuration(out)
-            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeIn))
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.4, 0, 0.6, 1))
+            // Content is drawn up into the housing as it goes: it shrinks
+            // about the housing edge (its anchor), blurs and fades — the iOS
+            // island's exit, not a fade in place.
             content.opacity = 0
-            content.transform = CATransform3DMakeScale(0.85, 0.85, 1)
+            content.transform = CATransform3DMakeScale(0.7, 0.7, 1)
+            content.setValue(Island.contentOutBlur, forKeyPath: "filters.blur.inputRadius")
             // Bars fall back to the midline as they fade, so the wave dies
             // rather than being cut off mid-word.
             for bar in bars {
@@ -679,7 +702,7 @@ private final class IslandView: NSView {
     /// How long the wave takes to settle on release before the next mode is
     /// revealed. This is the "event" of stopping: without it the wave simply
     /// evaporated and the release felt like nothing happened.
-    private static let releaseSettle: CFTimeInterval = 0.28
+    private static let releaseSettle: CFTimeInterval = 0.34
     private var modeGeneration = 0
 
     func setMode(_ m: IslandMode) {
@@ -718,9 +741,34 @@ private final class IslandView: NSView {
         CATransaction.begin()
         CATransaction.setAnimationDuration(Self.releaseSettle)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
-        for bar in bars {
-            bar.transform = CATransform3DMakeScale(1, Wave.minScale, 1)
+        // The wave settles from the centre outward: each bar starts a few
+        // milliseconds after its inner neighbour, so the collapse ripples
+        // rather than dropping in one frame.
+        let mid = CGFloat(bars.count - 1) / 2
+        for (i, bar) in bars.enumerated() {
+            let dist = abs(CGFloat(i) - mid)
+            let delay = Double(dist) * 0.012
+            let target = CATransform3DMakeScale(1, Wave.minScale, 1)
+            let fall = CABasicAnimation(keyPath: "transform")
+            fall.fromValue = bar.presentation()?.transform ?? bar.transform
+            fall.toValue = target
+            fall.duration = Self.releaseSettle - delay
+            fall.beginTime = CACurrentMediaTime() + delay
+            fall.fillMode = .backwards
+            fall.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            let dim = CABasicAnimation(keyPath: "opacity")
+            dim.fromValue = bar.presentation()?.opacity ?? bar.opacity
+            dim.toValue = 0.35
+            dim.duration = fall.duration
+            dim.beginTime = fall.beginTime
+            dim.fillMode = .backwards
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            bar.transform = target
             bar.opacity = 0.35
+            bar.add(fall, forKey: "settle")
+            bar.add(dim, forKey: "settleDim")
+            CATransaction.commit()
         }
         timer.opacity = 0
         glyphRing.opacity = 0
