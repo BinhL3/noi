@@ -839,6 +839,12 @@ pub fn run(cli_args: CliArgs) {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
+            // This fork rebranded from Handy (bundle id com.pais.handy), which
+            // moves the app-data directory. Carry settings, history and
+            // downloaded models across once, by renaming the old directory
+            // into place — instant, and nothing to copy.
+            migrate_legacy_app_data(app.handle());
+
             // Snapshot notch geometry while we are still on the main thread —
             // NSScreen requires it, and overlay positioning later runs off it.
             #[cfg(target_os = "macos")]
@@ -892,7 +898,7 @@ pub fn run(cli_args: CliArgs) {
             // for portable mode (redirects WebView2 cache to portable Data dir)
             let mut win_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("/".into()))
-                    .title("Handy")
+                    .title("Notch Scribe")
                     .inner_size(680.0, 570.0)
                     .min_inner_size(680.0, 570.0)
                     .resizable(true)
@@ -1030,4 +1036,32 @@ pub fn run(cli_args: CliArgs) {
             }
             _ => {}
         });
+}
+
+/// One-time move of Handy's app-data directory to this fork's. Runs before
+/// anything opens the settings store. A no-op once done, and if the rename
+/// cannot happen (different volume, permissions) the app simply starts fresh
+/// and the old data stays where it was.
+fn migrate_legacy_app_data(app: &AppHandle) {
+    let Ok(new_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let Some(parent) = new_dir.parent() else {
+        return;
+    };
+    let old_dir = parent.join("com.pais.handy");
+    if !old_dir.is_dir() || new_dir.exists() {
+        return;
+    }
+    match std::fs::rename(&old_dir, &new_dir) {
+        Ok(()) => log::info!(
+            "Migrated app data from {} to {}",
+            old_dir.display(),
+            new_dir.display()
+        ),
+        Err(e) => log::warn!(
+            "Could not migrate app data from {}: {e}; starting fresh",
+            old_dir.display()
+        ),
+    }
 }
