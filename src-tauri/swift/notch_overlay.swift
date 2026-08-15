@@ -68,7 +68,8 @@ private enum Island {
     /// Content appears a beat after the shape starts moving, once there is
     /// room for it, and leaves a beat before the shape shrinks. Both are what
     /// separates a morph from a pop.
-    static let contentInDelay: CFTimeInterval = 0.08
+    static let contentInDelay: CFTimeInterval = 0.14
+    static let contentInDuration: CFTimeInterval = 0.34
     static let contentOutDuration: CFTimeInterval = 0.22
     static let contentOutLead: CFTimeInterval = 0.12
 
@@ -133,6 +134,11 @@ private final class IslandView: NSView {
     private let shadowLayer = CALayer()
     /// Hairline light along the pill's edge, drawn above the contents.
     private let rim = CAShapeLayer()
+    /// Clips everything inside the pill to the island outline, and rides
+    /// the same spring, so content is revealed BY the shape opening — it
+    /// cannot be seen where the island has not yet grown. Without this the
+    /// wave and timer floated in before the chin existed.
+    private let clip = CAShapeLayer()
     /// Everything in the chin. Fades and scales in from the top edge as one
     /// unit, so content is revealed by the island opening rather than popping.
     private let content = CALayer()
@@ -212,6 +218,9 @@ private final class IslandView: NSView {
         shadowLayer.shadowRadius = 8
         shadowLayer.shadowOffset = CGSize(width: 0, height: -4) // downward, y-up space
         layer?.addSublayer(shadowLayer)
+
+        clip.fillColor = NSColor.black.cgColor
+        pill.mask = clip
 
         rim.strokeColor = NSColor.white.withAlphaComponent(0.09).cgColor
         rim.lineWidth = 1
@@ -296,6 +305,10 @@ private final class IslandView: NSView {
             CATransaction.setDisableActions(true)
             pill.frame = target
             pill.path = targetPath
+            for shape in [clip, rim] {
+                shape.frame = CGRect(origin: .zero, size: target.size)
+                shape.path = targetPath
+            }
             shadowLayer.frame = target
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
@@ -329,8 +342,14 @@ private final class IslandView: NSView {
         // Leaving the open state: content melts first, then the container
         // follows. Shrinking everything at once is what reads as "sudden" —
         // Apple's islands always retire the content a beat before the shape.
+        // The clip and rim live in the pill's own coordinate space, so their
+        // centre moves as the bounds grow; they need their own position spring.
+        let innerPosition = springAnimation(keyPath: "position", duration: duration, bounce: bounce)
+        innerPosition.fromValue = NSValue(point: clip.position)
+        innerPosition.toValue = NSValue(point: CGPoint(x: target.width / 2, y: target.height / 2))
+
         let contentLead: CFTimeInterval = leavingOpen ? Island.contentOutLead : 0
-        for anim in [size, position, pathSpring, shadowSpring] {
+        for anim in [size, position, pathSpring, shadowSpring, innerPosition] {
             anim.beginTime = CACurrentMediaTime() + contentLead
             anim.fillMode = .backwards
         }
@@ -342,6 +361,13 @@ private final class IslandView: NSView {
         pill.add(size, forKey: "bounds.size")
         pill.add(position, forKey: "position")
         pill.add(pathSpring, forKey: "path")
+        for shape in [clip, rim] {
+            shape.frame = CGRect(origin: .zero, size: target.size)
+            shape.path = targetPath
+            shape.add(size, forKey: "bounds.size")
+            shape.add(innerPosition, forKey: "position")
+            shape.add(pathSpring, forKey: "path")
+        }
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.frame = target
         shadowLayer.shadowPath = targetPath
@@ -360,8 +386,6 @@ private final class IslandView: NSView {
         let open = s == .open
         let chinHeight = pillRect.height - safeAreaTop
 
-        rim.frame = CGRect(origin: .zero, size: pillRect.size)
-        rim.path = path(for: pillRect.size, s)
         rim.opacity = s == .closed ? 0 : 1
 
         // The chin, as a layer anchored to the housing's bottom edge. When
@@ -386,7 +410,7 @@ private final class IslandView: NSView {
             unfold.fromValue = content.presentation()?.transform ?? content.transform
             unfold.toValue = CATransform3DIdentity
             for a in [fade, unfold] {
-                a.duration = 0.3
+                a.duration = Island.contentInDuration
                 a.beginTime = CACurrentMediaTime() + (animating ? Island.contentInDelay : 0)
                 a.fillMode = .backwards
                 a.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -406,7 +430,7 @@ private final class IslandView: NSView {
             CATransaction.setAnimationDuration(out)
             CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeIn))
             content.opacity = 0
-            content.transform = CATransform3DMakeScale(1, 0.6, 1)
+            content.transform = CATransform3DMakeScale(0.85, 0.85, 1)
             // Bars fall back to the midline as they fade, so the wave dies
             // rather than being cut off mid-word.
             for bar in bars {
