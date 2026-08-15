@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Notch Scribe",
+  "productName": "Noi",
   "version": "0.9.5",
-  "identifier": "com.binhle.notchscribe",
+  "identifier": "com.binhle.noi",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",

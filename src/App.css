@@ -45,6 +45,43 @@
   background-color: var(--color-background);
 }
 
+/* Liquid Glass (macOS). The window is transparent and a system glass view
+   sits behind the webview (src-tauri/src/glass.rs), so the page itself must
+   not paint a background — the desktop refracts through. Surfaces inside are
+   thin translucent fills with a hairline highlight; the glass does the rest,
+   so no CSS backdrop blur is stacked on top of it. */
+:root[data-platform="macos"] {
+  background-color: transparent;
+}
+
+.glass {
+  background: color-mix(in srgb, var(--color-background) 46%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-text) 9%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 45%, transparent),
+    0 1px 2px rgb(0 0 0 / 0.05);
+}
+@media (prefers-color-scheme: dark) {
+  .glass {
+    background: color-mix(in srgb, var(--color-background) 38%, transparent);
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
+      0 1px 2px rgb(0 0 0 / 0.25);
+  }
+}
+:root[data-theme="dark"] .glass {
+  background: color-mix(in srgb, var(--color-background) 38%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
+    0 1px 2px rgb(0 0 0 / 0.25);
+}
+
+/* Room for the traffic lights: the title bar is drawn over the content. */
+:root[data-platform="macos"] .titlebar-drag {
+  height: 28px;
+  flex-shrink: 0;
+}
+
 .container {
   margin: 0;
   padding-top: 10vh;

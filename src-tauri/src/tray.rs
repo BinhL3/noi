@@ -175,9 +175,9 @@ pub fn tray_tooltip() -> String {
 
 fn version_label() -> String {
     if cfg!(debug_assertions) {
-        format!("Notch Scribe v{} (Dev)", env!("CARGO_PKG_VERSION"))
+        format!("Noi v{} (Dev)", env!("CARGO_PKG_VERSION"))
     } else {
-        format!("Notch Scribe v{}", env!("CARGO_PKG_VERSION"))
+        format!("Noi v{}", env!("CARGO_PKG_VERSION"))
     }
 }
 

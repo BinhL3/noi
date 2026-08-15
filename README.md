@@ -1,8 +1,8 @@
-# Notch Scribe
+# Noi
 
 **Voice in, finished text out — from the notch.**
 
-Notch Scribe is a macOS dictation app built on [Handy](https://github.com/cjpais/Handy). Press a key, speak, and clean text lands wherever your cursor is. Everything runs on your machine: local speech-to-text, and a small local language model that tidies what you said before it is pasted.
+Noi is a macOS dictation app built on [Handy](https://github.com/cjpais/Handy). Press a key, speak, and clean text lands wherever your cursor is. Everything runs on your machine: local speech-to-text, and a small local language model that tidies what you said before it is pasted.
 
 What it adds to Handy:
 
@@ -31,4 +31,4 @@ Requires macOS 12+ for the notch overlay (falls back to Handy's overlay on other
 
 ## Credit
 
-Built on [Handy](https://github.com/cjpais/Handy) by CJ Pais and contributors, MIT licensed. Notch Scribe keeps the same license — see [LICENSE](LICENSE).
+Built on [Handy](https://github.com/cjpais/Handy) by CJ Pais and contributors, MIT licensed. Noi keeps the same license — see [LICENSE](LICENSE).

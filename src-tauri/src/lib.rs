@@ -8,6 +8,8 @@ mod catalog;
 pub mod cli;
 mod clipboard;
 mod commands;
+#[cfg(target_os = "macos")]
+mod glass;
 mod helpers;
 mod input;
 mod llm_client;
@@ -839,10 +841,10 @@ pub fn run(cli_args: CliArgs) {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
-            // This fork rebranded from Handy (bundle id com.pais.handy), which
-            // moves the app-data directory. Carry settings, history and
-            // downloaded models across once, by renaming the old directory
-            // into place — instant, and nothing to copy.
+            // This fork has been rebranded (Handy → Notch Scribe → Noi), and
+            // each bundle id has its own app-data directory. Carry settings,
+            // history and downloaded models across once, by renaming the
+            // newest old directory into place — instant, nothing to copy.
             migrate_legacy_app_data(app.handle());
 
             // Snapshot notch geometry while we are still on the main thread —
@@ -898,18 +900,31 @@ pub fn run(cli_args: CliArgs) {
             // for portable mode (redirects WebView2 cache to portable Data dir)
             let mut win_builder =
                 tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("/".into()))
-                    .title("Notch Scribe")
+                    .title("Noi")
                     .inner_size(680.0, 570.0)
                     .min_inner_size(680.0, 570.0)
                     .resizable(true)
                     .maximizable(true)
                     .visible(false);
 
+            // Liquid Glass: a transparent window with the title bar drawn over
+            // the content, and a system glass view behind the webview (see
+            // glass.rs). The web side keeps its surfaces translucent.
+            #[cfg(target_os = "macos")]
+            {
+                win_builder = win_builder
+                    .transparent(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .hidden_title(true);
+            }
+
             if let Some(data_dir) = portable::data_dir() {
                 win_builder = win_builder.data_directory(data_dir.join("webview"));
             }
 
-            win_builder.build()?;
+            let main_window = win_builder.build()?;
+            #[cfg(target_os = "macos")]
+            glass::apply(&main_window);
 
             let mut settings = get_settings(app.handle());
 
@@ -1038,21 +1053,31 @@ pub fn run(cli_args: CliArgs) {
         });
 }
 
-/// One-time move of Handy's app-data directory to this fork's. Runs before
-/// anything opens the settings store. A no-op once done, and if the rename
-/// cannot happen (different volume, permissions) the app simply starts fresh
-/// and the old data stays where it was.
+/// Bundle ids this app has shipped under, newest first. The first one with a
+/// data directory on disk is the one carried forward.
+const LEGACY_BUNDLE_IDS: &[&str] = &["com.binhle.notchscribe", "com.pais.handy"];
+
+/// One-time move of a previous identity's app-data directory to this one's.
+/// Runs before anything opens the settings store. A no-op once done, and if
+/// the rename cannot happen (different volume, permissions) the app simply
+/// starts fresh and the old data stays where it was.
 fn migrate_legacy_app_data(app: &AppHandle) {
     let Ok(new_dir) = app.path().app_data_dir() else {
         return;
     };
+    if new_dir.exists() {
+        return;
+    }
     let Some(parent) = new_dir.parent() else {
         return;
     };
-    let old_dir = parent.join("com.pais.handy");
-    if !old_dir.is_dir() || new_dir.exists() {
+    let Some(old_dir) = LEGACY_BUNDLE_IDS
+        .iter()
+        .map(|id| parent.join(id))
+        .find(|p| p.is_dir())
+    else {
         return;
-    }
+    };
     match std::fs::rename(&old_dir, &new_dir) {
         Ok(()) => log::info!(
             "Migrated app data from {} to {}",

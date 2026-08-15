@@ -297,14 +297,19 @@ function App() {
         <ErrorBoundary context="What's New">
           <WhatsNewGate />
         </ErrorBoundary>
+        {/* Overlay title bar: this strip is where the traffic lights sit and
+            where the window can be dragged from. Zero height off macOS. */}
+        <div data-tauri-drag-region className="titlebar-drag" />
         {/* Main content area that takes remaining space */}
         <div className="flex-1 flex overflow-hidden">
           <Sidebar
             activeSection={currentSection}
             onSectionChange={setCurrentSection}
           />
-          {/* Scrollable content area */}
-          <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Scrollable content area. A soft fill over the glass keeps long
+              settings text readable on busy wallpapers; the sidebar stays
+              clear so the glass shows. */}
+          <div className="flex-1 flex flex-col overflow-hidden bg-background/40 border-s border-text/10">
             <div className="flex-1 overflow-y-auto">
               <div className="flex flex-col items-center p-4 gap-4">
                 <AccessibilityPermissions />
