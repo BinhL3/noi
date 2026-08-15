@@ -1,10 +1,14 @@
 //! Gesture grammar for the refine-on-selection key.
 //!
-//! - tap                    → refine the selection now, no recording
+//! - tap                      → refine the selection now, no recording
 //! - tap, then press-and-hold → record an instruction while held;
-//!                            release → stop and apply it
+//!                              release → stop and apply it
+//! - double-tap               → record an instruction until the next tap
+//!                              (the second press released quickly means
+//!                              "keep listening"); that tap applies it
 //!
-//! Cancel is Handy's cancel binding (Escape), as for any recording.
+//! Users describe the second gesture as "double tap", so both grammars
+//! work and mean the same thing. Cancel is Handy's cancel binding (Escape).
 //!
 //! A tap is only known to be a lone tap once the double-tap window has passed
 //! with no second press, so refine runs `TAP_WINDOW` late — invisible next to
@@ -28,11 +32,18 @@ use crate::actions::{capture_refine_selection, refine_selection_now, ACTION_MAP}
 /// Long enough that the island's armed acknowledgement is seen arriving,
 /// short enough that a plain refine feels immediate next to the model call.
 const TAP_WINDOW: Duration = Duration::from_millis(450);
+/// A second press released faster than this was a tap, not a hold: keep
+/// recording until the next tap instead of stopping on release.
+const QUICK_RELEASE: Duration = Duration::from_millis(280);
 
 struct Gesture {
     last_press: Option<Instant>,
-    /// The second press is down and recording; its release stops.
+    /// The second press is down and recording; its release stops — unless it
+    /// was quick, in which case recording continues (`latched`).
     holding: bool,
+    holding_since: Option<Instant>,
+    /// Recording continues after a quick double-tap; the next press stops.
+    latched: bool,
     generation: u64,
 }
 
@@ -40,6 +51,8 @@ static GESTURE: Lazy<Mutex<Gesture>> = Lazy::new(|| {
     Mutex::new(Gesture {
         last_press: None,
         holding: false,
+        holding_since: None,
+        latched: false,
         generation: 0,
     })
 });
@@ -53,6 +66,23 @@ pub fn event(app: &AppHandle, binding_id: &str, hotkey_string: &str, is_pressed:
 }
 
 fn press(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
+    // A press while latched (double-tapped, still recording) ends it.
+    let latched = {
+        let Ok(mut g) = GESTURE.lock() else { return };
+        std::mem::replace(&mut g.latched, false)
+    };
+    if latched {
+        debug!("Refine gesture: tap while listening → stop and apply the instruction");
+        if let Ok(mut g) = GESTURE.lock() {
+            g.last_press = None;
+            g.generation += 1;
+        }
+        if let Some(action) = ACTION_MAP.get(binding_id) {
+            action.stop(app, binding_id, hotkey_string);
+        }
+        return;
+    }
+
     let (second, generation) = {
         let Ok(mut g) = GESTURE.lock() else { return };
         if g.holding {
@@ -67,6 +97,7 @@ fn press(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
         g.generation += 1;
         if second {
             g.holding = true;
+            g.holding_since = Some(now);
         }
         (second, g.generation)
     };
@@ -107,11 +138,23 @@ fn press(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
 }
 
 fn release(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
-    let was_holding = {
+    let (was_holding, quick) = {
         let Ok(mut g) = GESTURE.lock() else { return };
-        std::mem::replace(&mut g.holding, false)
+        let was = std::mem::replace(&mut g.holding, false);
+        let quick = g
+            .holding_since
+            .take()
+            .is_some_and(|t| t.elapsed() < QUICK_RELEASE);
+        if was && quick {
+            g.latched = true;
+        }
+        (was, quick)
     };
     if !was_holding {
+        return;
+    }
+    if quick {
+        debug!("Refine gesture: double-tap → keep listening until the next tap");
         return;
     }
     debug!("Refine gesture: released → stop and apply the instruction");

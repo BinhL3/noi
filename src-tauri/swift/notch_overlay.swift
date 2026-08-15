@@ -32,7 +32,7 @@ enum IslandMode: Equatable {
     case dictate
     case instruct
     /// The refine key was tapped once: the island acknowledges — sparkle,
-    /// "Refine · press again to describe a change" — and waits out the tap window
+    /// "Refine / double-tap to describe a change instead" — and waits out the tap window
     /// to see whether a hold follows (→ instruct) or not (→ working).
     case armed
     /// Label plus the SF Symbol that says which kind of work: transcribing
@@ -665,8 +665,8 @@ private final class IslandView: NSView {
         var sub = ""
         switch mode {
         case .dictate: symbolName = ""
-        case .instruct: symbolName = "sparkles"; text = "Describe your change"; sub = "release to apply"
-        case .armed: symbolName = "sparkles"; text = "Refine"; sub = "press again to describe a change"
+        case .instruct: symbolName = "sparkles"; text = "Describe your change"; sub = "tap again, or release, to apply"
+        case .armed: symbolName = "sparkles"; text = "Refine"; sub = "double-tap to describe a change instead"
         case .working(let s, let sym): symbolName = sym; text = s
         case .done(let ok): symbolName = ok ? "" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
         }
@@ -1032,7 +1032,9 @@ private final class IslandView: NSView {
         CATransaction.setDisableActions(true)
         timer.string = text
         CATransaction.commit()
-        if clockEnabled, seconds >= Text.clockAfter, timer.opacity == 0, mode.isRecording {
+        // Only plain dictation gets the clock; in describe-mode the right side
+        // is the hint.
+        if clockEnabled, seconds >= Text.clockAfter, timer.opacity == 0, mode == .dictate {
             timer.opacity = 1 // implicit fade
         }
     }
