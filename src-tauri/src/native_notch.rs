@@ -65,6 +65,8 @@ pub enum Mode {
     Instruct = 1,
     Transcribing = 2,
     Refining = 3,
+    /// Refine key tapped once; waiting to see if a hold follows.
+    Armed = 4,
 }
 
 /// Set before `show()` for a fresh open, or while open to cross-fade.

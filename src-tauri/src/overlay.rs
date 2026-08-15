@@ -704,6 +704,24 @@ pub fn show_transcribing_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "transcribing");
 }
 
+/// Refine key armed (first tap): the native island acknowledges and waits.
+/// Native-only — the webview overlay has no such state.
+pub fn show_armed_overlay(app_handle: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let settings = settings::get_settings(app_handle);
+        if settings.overlay_style != OverlayStyle::None
+            && settings.overlay_position == OverlayPosition::Top
+            && crate::native_notch::is_available()
+        {
+            crate::native_notch::set_mode(crate::native_notch::Mode::Armed);
+            crate::native_notch::show();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app_handle;
+}
+
 /// Shows the processing overlay window
 pub fn show_processing_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "processing");

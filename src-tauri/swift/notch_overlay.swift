@@ -31,6 +31,10 @@ enum IslandState {
 enum IslandMode: Equatable {
     case dictate
     case instruct
+    /// The refine key was tapped once: the island acknowledges — sparkle,
+    /// "Refine", the capsule line part-filled — and waits out the tap window
+    /// to see whether a hold follows (→ instruct) or not (→ working).
+    case armed
     /// Label plus the SF Symbol that says which kind of work: transcribing
     /// shows lines of text (speech becoming text — not a waveform, which now
     /// means recording), refining the sparkle.
@@ -211,6 +215,10 @@ private final class IslandView: NSView {
     private let checkStroke = CAShapeLayer()
     /// Status text for working/done ("Refining…", "Done").
     private let label = CATextLayer()
+    /// The capsule line: a thin stroke along the bottom of the chin that
+    /// fills to 60% when the refine key is armed and completes, in lavender,
+    /// when a hold begins — the "armed → committed" acknowledgement.
+    private let capsule = CAShapeLayer()
     /// A band of light sweeping through the working label — the system's
     /// "thinking" shimmer — so a wait reads as alive rather than stuck.
     private let shimmer = CAGradientLayer()
@@ -221,6 +229,8 @@ private final class IslandView: NSView {
     private var recordingStart: Date?
     private enum Wave {
         static let totalWidth: CGFloat = 196
+        /// Narrower beside the "Describe your change" hint.
+        static let instructWidth: CGFloat = 120
         static let maxHeight: CGFloat = 46
         /// Points per wave path; constant so paths morph.
         static let samples = 48
@@ -370,6 +380,13 @@ private final class IslandView: NSView {
         label.alignmentMode = .left
         label.truncationMode = .end
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+
+        capsule.fillColor = NSColor.clear.cgColor
+        capsule.lineWidth = 3
+        capsule.lineCap = .round
+        capsule.strokeEnd = 0
+        capsule.opacity = 0
+        content.addSublayer(capsule)
         content.addSublayer(label)
 
         shimmer.startPoint = CGPoint(x: 0, y: 0.5)
@@ -609,6 +626,7 @@ private final class IslandView: NSView {
         switch mode {
         case .dictate: tint = Tint.dictate
         case .instruct: tint = Tint.instruct
+        case .armed: tint = Tint.instruct
         case .working: tint = Tint.instruct
         case .done(let ok): tint = ok ? Tint.ok : Tint.fail
         }
@@ -630,14 +648,15 @@ private final class IslandView: NSView {
         // Starts invisible; updateTimer fades it in after Text.clockAfter.
         timer.opacity = 0
         symbol.opacity = 1
-        label.isHidden = recording
+        label.isHidden = mode == .dictate
 
         // Symbol image + label text for the mode.
         let symbolName: String
         var text = ""
         switch mode {
         case .dictate: symbolName = ""
-        case .instruct: symbolName = "sparkles"
+        case .instruct: symbolName = "sparkles"; text = "Describe your change"
+        case .armed: symbolName = "sparkles"; text = "Refine"
         case .working(let s, let sym): symbolName = sym; text = s
         case .done(let ok): symbolName = ok ? "" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
         }
@@ -652,7 +671,10 @@ private final class IslandView: NSView {
         // Measure the cluster: recording = wave · clock; otherwise glyph · label.
         let glyphWidth = Glyph.symbolSize
         let labelWidth = text.isEmpty ? 0 : ceil((text as NSString).size(withAttributes: [.font: Text.font]).width) + 2
-        let clusterWidth = recording ? Wave.totalWidth : glyphWidth + gap + labelWidth
+        let instruct = mode == .instruct
+        let waveWidth = instruct ? Wave.instructWidth : Wave.totalWidth
+        let clusterWidth = instruct ? waveWidth + gap + labelWidth
+            : recording ? waveWidth : glyphWidth + gap + labelWidth
         var x = (chinSize.width - clusterWidth) / 2
 
         if !recording {
@@ -665,7 +687,7 @@ private final class IslandView: NSView {
         }
 
         if recording {
-            waveRect = CGRect(x: x, y: midY - Wave.maxHeight / 2, width: Wave.totalWidth, height: Wave.maxHeight)
+            waveRect = CGRect(x: x, y: midY - Wave.maxHeight / 2, width: waveWidth, height: Wave.maxHeight)
             for wave in waveLayers { wave.frame = waveRect }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -680,9 +702,46 @@ private final class IslandView: NSView {
                 width: Text.clockWidth,
                 height: clockHeight
             )
+            if instruct {
+                x += waveWidth + gap
+                label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
+            }
         } else {
             label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
         }
+
+        // Capsule line along the chin's bottom edge, spanning the straight
+        // run between the corner rounds. 60% armed, full when holding.
+        let inset = Island.flare(.open) + Island.cornerRadius(.open)
+        let lineY: CGFloat = 5
+        let linePath = CGMutablePath()
+        linePath.move(to: CGPoint(x: inset, y: lineY))
+        linePath.addLine(to: CGPoint(x: chinSize.width - inset, y: lineY))
+        capsule.frame = CGRect(origin: .zero, size: chinSize)
+        capsule.path = linePath
+        let fillTo: CGFloat
+        switch mode {
+        case .armed:
+            capsule.strokeColor = WavePalette.dictate[1].cgColor
+            capsule.opacity = 1
+            fillTo = 0.6
+        case .instruct:
+            capsule.strokeColor = WavePalette.instruct[0].cgColor
+            capsule.opacity = 1
+            fillTo = 1
+        default:
+            capsule.opacity = 0
+            fillTo = 0
+        }
+        // Layout runs with actions disabled; the fill is the whole point of
+        // this line, so it animates explicitly from wherever it was.
+        let fill = CABasicAnimation(keyPath: "strokeEnd")
+        fill.fromValue = capsule.presentation()?.strokeEnd ?? capsule.strokeEnd
+        fill.toValue = fillTo
+        fill.duration = 0.35
+        fill.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        capsule.strokeEnd = fillTo
+        capsule.add(fill, forKey: "fill")
 
         // Working: the sparkle breathes and light sweeps through the label, so
         // a long call still reads as alive.
@@ -774,6 +833,10 @@ private final class IslandView: NSView {
 
     func setMode(_ m: IslandMode) {
         guard m != mode else { return }
+        // Armed → recording always means the hold began; the pipeline's
+        // generic "recording" (dictate) arrives a beat before "instruct" and
+        // would flash the plain wave. Skip it; instruct follows at once.
+        if mode == .armed, m == .dictate { return }
         let wasRecording = mode.isRecording
         mode = m
         modeGeneration += 1
@@ -1177,6 +1240,7 @@ public func notch_overlay_set_mode(_ mode: Int32) {
     let m: IslandMode
     switch mode {
     case 1: m = .instruct
+    case 4: m = .armed
     case 2: m = .working("Transcribing…", symbol: "text.alignleft")
     case 3: m = .working("Refining…", symbol: "sparkles")
     default: m = .dictate

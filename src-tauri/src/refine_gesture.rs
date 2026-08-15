@@ -90,6 +90,8 @@ fn press(app: &AppHandle, binding_id: &str, hotkey_string: &str) {
         return;
     }
     debug!("Refine gesture: tap → refine once the window closes");
+    // Acknowledge on screen right away: sparkle, "Refine", capsule 60%.
+    crate::overlay::show_armed_overlay(app);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(TAP_WINDOW);
