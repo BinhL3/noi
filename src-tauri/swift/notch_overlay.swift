@@ -138,6 +138,10 @@ private final class IslandView: NSView {
     /// Elapsed time, right of the wave, as Voice Memos pairs them. Digits
     /// are monospaced so the label doesn't jitter as they tick.
     private let timer = CATextLayer()
+    /// The Voice Memos recording control: a red rounded square inside a thin
+    /// white ring. It is the one glyph that says "recording" without a word.
+    private let glyphRing = CAShapeLayer()
+    private let glyphSquare = CALayer()
     private var timerTick: Timer?
     private var recordingStart: Date?
     private enum Wave {
@@ -155,8 +159,18 @@ private final class IslandView: NSView {
     }
     private enum Text {
         static let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        static let width: CGFloat = 40
+        static let width: CGFloat = 34
     }
+    private enum Glyph {
+        static let ringDiameter: CGFloat = 18
+        static let ringWidth: CGFloat = 1.5
+        static let squareSide: CGFloat = 7
+        static let squareRadius: CGFloat = 2
+    }
+    /// Space between glyph, wave and timer. The three are laid out as one
+    /// centred cluster — content pinned to opposite walls read as two
+    /// unrelated things.
+    private static let clusterGap: CGFloat = 12
 
     /// Level history for the voice-memo waveform: newest sample on the right,
     /// scrolling left as speech continues — the shape of what was just said,
@@ -211,11 +225,19 @@ private final class IslandView: NSView {
             bars.append(bar)
         }
 
+        glyphRing.fillColor = NSColor.clear.cgColor
+        glyphRing.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        glyphRing.lineWidth = Glyph.ringWidth
+        content.addSublayer(glyphRing)
+        glyphSquare.backgroundColor = Wave.tint.cgColor
+        glyphSquare.cornerRadius = Glyph.squareRadius
+        content.addSublayer(glyphSquare)
+
         timer.string = "0:00"
         timer.font = Text.font
         timer.fontSize = Text.font.pointSize
         timer.foregroundColor = Wave.tint.cgColor
-        timer.alignmentMode = .right
+        timer.alignmentMode = .left
         timer.truncationMode = .none
         timer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         content.addSublayer(timer)
@@ -364,27 +386,35 @@ private final class IslandView: NSView {
             CATransaction.commit()
         }
 
-        // Wave on the left, time on the right, both inset from the wall by
-        // the open flare plus a margin (the reference apps' 19 + 12).
-        let inset = Island.flare(.open) + 12
+        // One centred cluster: glyph · wave · time.
+        let gap = Self.clusterGap
+        let clusterWidth = Glyph.ringDiameter + gap + Wave.totalWidth + gap + Text.width
+        var x = (chinSize.width - clusterWidth) / 2
         let midY = chinSize.height / 2
-        let waveLeft = inset
+
+        let ringRect = CGRect(x: x, y: midY - Glyph.ringDiameter / 2, width: Glyph.ringDiameter, height: Glyph.ringDiameter)
+        glyphRing.frame = ringRect
+        glyphRing.path = CGPath(ellipseIn: CGRect(origin: .zero, size: ringRect.size).insetBy(dx: Glyph.ringWidth / 2, dy: Glyph.ringWidth / 2), transform: nil)
+        glyphSquare.frame = CGRect(
+            x: ringRect.midX - Glyph.squareSide / 2,
+            y: ringRect.midY - Glyph.squareSide / 2,
+            width: Glyph.squareSide,
+            height: Glyph.squareSide
+        )
+        x += Glyph.ringDiameter + gap
+
         for (i, bar) in bars.enumerated() {
             // frame-setting resets anchored position, so place via bounds+position.
             bar.bounds = CGRect(x: 0, y: 0, width: Wave.barWidth, height: Wave.maxHeight)
             bar.position = CGPoint(
-                x: waveLeft + CGFloat(i) * (Wave.barWidth + Wave.gap) + Wave.barWidth / 2,
+                x: x + CGFloat(i) * (Wave.barWidth + Wave.gap) + Wave.barWidth / 2,
                 y: midY
             )
         }
+        x += Wave.totalWidth + gap
 
         let textHeight = ceil(Text.font.ascender - Text.font.descender)
-        timer.frame = CGRect(
-            x: chinSize.width - inset - Text.width,
-            y: midY - textHeight / 2 - 1,
-            width: Text.width,
-            height: textHeight
-        )
+        timer.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: Text.width, height: textHeight)
     }
 
     /// Mic level, 0...1, at ~24 Hz. Voice-memo style: the new sample enters on
