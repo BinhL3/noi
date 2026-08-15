@@ -67,7 +67,7 @@ private enum Island {
     /// Shadow only once lifted: at rest the island must read as hardware, and
     /// hardware does not cast a shadow onto the wallpaper.
     static func shadowOpacity(_ s: IslandState) -> Float {
-        switch s { case .closed: 0; case .peek: 0.35; case .open: 0.6 }
+        switch s { case .closed: 0; case .peek: 0.4; case .open: 0.7 }
     }
 
     /// Springs as Apple specifies them (WWDC23 "Animate with springs"):
@@ -115,7 +115,24 @@ private func springAnimation(keyPath: String, duration: CFTimeInterval, bounce: 
 /// Top corners are concave quadratic fillets flaring outward to the top edge;
 /// bottom corners are ordinary convex rounds. The body is inset by `flare` on
 /// each side so the flares stay inside the frame.
+/// Coordinates are CENTRED: x runs from -w/2 to w/2, y from 0 (bottom) to h
+/// (top). Every layer in the island uses this frame, anchored at top-centre,
+/// so nothing's position depends on the current width — the pill's centre is
+/// fixed and its bounds grow symmetrically about it. When positions were
+/// measured from the pill's left edge, any two springs that were not
+/// bit-identical showed as a horizontal slide mid-animation.
 private func islandPath(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat) -> CGPath {
+    let raw = islandPathLeftOrigin(size: size, cornerRadius: r, flare: f)
+    var shift = CGAffineTransform(translationX: -size.width / 2, y: 0)
+    return raw.copy(using: &shift) ?? raw
+}
+
+/// Centred bounds for a pill of `size`, top-centre anchored.
+private func islandBounds(_ size: CGSize) -> CGRect {
+    CGRect(x: -size.width / 2, y: 0, width: size.width, height: size.height)
+}
+
+private func islandPathLeftOrigin(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat) -> CGPath {
     let w = size.width
     let h = size.height
     let path = CGMutablePath()
@@ -189,7 +206,7 @@ private final class IslandView: NSView {
         static let tint = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
     }
     private enum Text {
-        static let font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .medium)
+        static let font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
         static let width: CGFloat = 40
     }
     private enum Tint {
@@ -243,15 +260,24 @@ private final class IslandView: NSView {
         shadowLayer.backgroundColor = NSColor.clear.cgColor
         shadowLayer.shadowColor = NSColor.black.cgColor
         shadowLayer.shadowOpacity = 0
-        shadowLayer.shadowRadius = 8
-        shadowLayer.shadowOffset = CGSize(width: 0, height: -4) // downward, y-up space
+        shadowLayer.shadowRadius = 10
+        shadowLayer.shadowOffset = CGSize(width: 0, height: -5) // downward, y-up space
         layer?.addSublayer(shadowLayer)
+
+        // Everything hangs from the top-centre of the view. See islandPath.
+        for l in [pill, shadowLayer, clip, rim] as [CALayer] {
+            l.anchorPoint = CGPoint(x: 0.5, y: 1)
+        }
 
         clip.fillColor = NSColor.black.cgColor
         pill.mask = clip
 
-        rim.strokeColor = NSColor.white.withAlphaComponent(0.09).cgColor
-        rim.lineWidth = 1
+        // The HIG key line: on a dark desktop a pure-black island vanishes
+        // into the wallpaper and the menu bar; a hairline of light along its
+        // edge is what separates it. Drawn just inside the outline so the
+        // flares keep their crisp meeting with the screen edge.
+        rim.strokeColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        rim.lineWidth = 1.5
         rim.fillColor = NSColor.clear.cgColor
         layer?.addSublayer(pill)
 
@@ -282,7 +308,7 @@ private final class IslandView: NSView {
 
         label.font = Text.font
         label.fontSize = Text.font.pointSize
-        label.foregroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
+        label.foregroundColor = NSColor.white.cgColor
         label.alignmentMode = .left
         label.truncationMode = .end
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
@@ -332,27 +358,34 @@ private final class IslandView: NSView {
         pillFrame(state).insetBy(dx: -Island.hoverSlop(state), dy: -Island.hoverSlop(state))
     }
 
+    /// Where the top-centre of the pill sits in the view. Constant.
+    private var pillTop: CGPoint { CGPoint(x: bounds.width / 2, y: bounds.height) }
+
     func layoutPill(_ s: IslandState, animated: Bool) {
         let growing = Island.chinHeight(s) > Island.chinHeight(state)
         let leavingOpen = state == .open && s != .open
         state = s
         let target = pillFrame(s)
+        let targetBounds = islandBounds(target.size)
         let targetPath = path(for: target.size, s)
         let shadowOpacity = Island.shadowOpacity(s)
 
         guard animated else {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            pill.frame = target
+            for l in [pill, shadowLayer] {
+                l.position = pillTop
+                l.bounds = targetBounds
+            }
             pill.path = targetPath
             for shape in [clip, rim] {
-                shape.frame = CGRect(origin: .zero, size: target.size)
+                shape.position = .zero
+                shape.bounds = targetBounds
                 shape.path = targetPath
             }
-            shadowLayer.frame = target
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
-            layoutContents(in: target, s)
+            layoutContents(s)
             CATransaction.commit()
             return
         }
@@ -360,16 +393,12 @@ private final class IslandView: NSView {
         let duration = growing ? Island.growDuration : Island.shrinkDuration
         let bounce = growing ? Island.growBounce : Island.shrinkBounce
 
-        // Bounds, position and path must ride the identical spring, or the
-        // flares visibly detach from the corners mid-animation and the shadow
-        // lags the pill.
-        let size = springAnimation(keyPath: "bounds.size", duration: duration, bounce: bounce)
-        size.fromValue = NSValue(size: pill.bounds.size)
-        size.toValue = NSValue(size: target.size)
-
-        let position = springAnimation(keyPath: "position", duration: duration, bounce: bounce)
-        position.fromValue = NSValue(point: pill.position)
-        position.toValue = NSValue(point: CGPoint(x: target.midX, y: target.midY))
+        // One spring for bounds, one for the outline; nothing has a position
+        // to animate. Bounds and path must share the identical spring, or the
+        // flares visibly detach from the corners mid-animation.
+        let boundsSpring = springAnimation(keyPath: "bounds", duration: duration, bounce: bounce)
+        boundsSpring.fromValue = NSValue(rect: pill.bounds)
+        boundsSpring.toValue = NSValue(rect: targetBounds)
 
         let pathSpring = springAnimation(keyPath: "path", duration: duration, bounce: bounce)
         pathSpring.fromValue = pill.path
@@ -382,59 +411,38 @@ private final class IslandView: NSView {
         // Leaving the open state: content melts first, then the container
         // follows. Shrinking everything at once is what reads as "sudden" —
         // Apple's islands always retire the content a beat before the shape.
-        // The clip and rim live in the pill's own coordinate space, so their
-        // centre moves as the bounds grow; they need their own position spring.
-        let innerPosition = springAnimation(keyPath: "position", duration: duration, bounce: bounce)
-        innerPosition.fromValue = NSValue(point: clip.position)
-        innerPosition.toValue = NSValue(point: CGPoint(x: target.width / 2, y: target.height / 2))
-
-        // Content keeps its open geometry always (see layoutContents); only its
-        // horizontal centre follows the pill, on the pill's spring, so it never
-        // drifts relative to the shape while fading.
-        let contentPosition = springAnimation(keyPath: "position", duration: duration, bounce: bounce)
-        contentPosition.fromValue = NSValue(point: content.position)
-        contentPosition.toValue = NSValue(point: CGPoint(x: target.width / 2, y: Island.chinHeight(.open)))
-
         let contentLead: CFTimeInterval = leavingOpen ? Island.contentOutLead : 0
-        for anim in [size, position, pathSpring, shadowSpring, innerPosition, contentPosition] {
+        for anim in [boundsSpring, pathSpring, shadowSpring] {
             anim.beginTime = CACurrentMediaTime() + contentLead
             anim.fillMode = .backwards
         }
 
         CATransaction.begin()
         CATransaction.setAnimationDuration(duration)
-        pill.frame = target
+        pill.bounds = targetBounds
         pill.path = targetPath
-        pill.add(size, forKey: "bounds.size")
-        pill.add(position, forKey: "position")
+        pill.add(boundsSpring, forKey: "bounds")
         pill.add(pathSpring, forKey: "path")
         for shape in [clip, rim] {
-            shape.frame = CGRect(origin: .zero, size: target.size)
+            shape.bounds = targetBounds
             shape.path = targetPath
-            shape.add(size, forKey: "bounds.size")
-            shape.add(innerPosition, forKey: "position")
+            shape.add(boundsSpring, forKey: "bounds")
             shape.add(pathSpring, forKey: "path")
         }
         // The shadow is a sibling layer (the pill would clip its own shadow).
-        shadowLayer.frame = target
+        shadowLayer.bounds = targetBounds
         shadowLayer.shadowPath = targetPath
         shadowLayer.shadowOpacity = shadowOpacity
-        shadowLayer.add(size, forKey: "bounds.size")
-        shadowLayer.add(position, forKey: "position")
+        shadowLayer.add(boundsSpring, forKey: "bounds")
         shadowLayer.add(shadowSpring, forKey: "shadowPath")
-        layoutContents(in: target, s)
-        // AFTER layoutContents: it sets content.position, and a property set
-        // installs an implicit animation under the same "position" key that
-        // would replace this spring. Content easing while the pill springs
-        // showed as the cluster sliding a couple of pixels mid-transition.
-        content.add(contentPosition, forKey: "position")
+        layoutContents(s)
         CATransaction.commit()
     }
 
     /// Content lives in the chin, strictly below the housing — which, in this
     /// bottom-up coordinate space, is the LOWER part of the pill rect. The
     /// housing occupies the top `safeAreaTop` points.
-    private func layoutContents(in pillRect: CGRect, _ s: IslandState) {
+    private func layoutContents(_ s: IslandState) {
         let open = s == .open
 
         rim.opacity = s == .closed ? 0 : 1
@@ -448,10 +456,10 @@ private final class IslandView: NSView {
         // smaller pill made the wave slide down-left as it faded. Its top edge
         // sits at the open chin height in pill coordinates; when the pill is
         // shorter than that the content is above the pill and the mask hides
-        // it. Only the horizontal centre tracks the pill.
+        // it. x = 0 is the pill's centre line, always.
         let chinSize = CGSize(width: pillFrame(.open).width, height: Island.chinHeight(.open))
         content.bounds = CGRect(origin: .zero, size: chinSize)
-        content.position = CGPoint(x: pillRect.width / 2, y: Island.chinHeight(.open))
+        content.position = CGPoint(x: 0, y: Island.chinHeight(.open))
 
         // Content in: rides the container's spring. Content out: quick and
         // eased, ahead of the container (see layoutPill).
