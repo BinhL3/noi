@@ -144,6 +144,19 @@ private func islandBounds(_ size: CGSize) -> CGRect {
     CGRect(x: -size.width / 2, y: 0, width: size.width, height: size.height)
 }
 
+/// The bottom run of the outline — down the left round, along the bottom,
+/// up the right round — in centred coordinates. The refine capsule strokes
+/// this so its fill travels the island's own edge.
+private func bottomEdgePath(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat) -> CGPath {
+    let w = size.width
+    let p = CGMutablePath()
+    p.move(to: CGPoint(x: -w / 2 + f, y: r))
+    p.addQuadCurve(to: CGPoint(x: -w / 2 + f + r, y: 0), control: CGPoint(x: -w / 2 + f, y: 0))
+    p.addLine(to: CGPoint(x: w / 2 - f - r, y: 0))
+    p.addQuadCurve(to: CGPoint(x: w / 2 - f, y: r), control: CGPoint(x: w / 2 - f, y: 0))
+    return p
+}
+
 /// `closed: false` leaves out the top edge — the segment along the screen
 /// edge — for stroking: the fill needs it, but a key line drawn there is a
 /// seam between the island and the housing, and lightens the island's top so
@@ -267,7 +280,7 @@ private final class IslandView: NSView {
         static let dictate = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
         /// The brand accent — a light steel blue — for anything that is the
         /// assistant rather than the recording.
-        static let instruct = NSColor(red: 0.62, green: 0.77, blue: 0.91, alpha: 1)
+        static let instruct = NSColor(red: 0.76, green: 0.66, blue: 0.96, alpha: 1)
         static let ok = NSColor(red: 0.19, green: 0.82, blue: 0.35, alpha: 1)
         static let fail = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
     }
@@ -381,12 +394,15 @@ private final class IslandView: NSView {
         label.truncationMode = .end
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
 
+        // On the outline itself, inside the pill's mask: half the stroke is
+        // clipped, so it reads as the edge lighting up, not a bar above it.
         capsule.fillColor = NSColor.clear.cgColor
-        capsule.lineWidth = 3
+        capsule.lineWidth = 4
         capsule.lineCap = .round
         capsule.strokeEnd = 0
         capsule.opacity = 0
-        content.addSublayer(capsule)
+        capsule.anchorPoint = CGPoint(x: 0.5, y: 0)
+        pill.addSublayer(capsule)
         content.addSublayer(label)
 
         shimmer.startPoint = CGPoint(x: 0, y: 0.5)
@@ -462,12 +478,13 @@ private final class IslandView: NSView {
                 l.bounds = targetBounds
             }
             pill.path = targetPath
-            for shape in [clip, rim] {
+            for shape in [clip, rim, capsule] {
                 shape.position = .zero
                 shape.bounds = targetBounds
             }
             clip.path = targetPath
             rim.path = path(for: target.size, s, closed: false)
+            capsule.path = bottomEdgePath(size: target.size, cornerRadius: Island.cornerRadius(s), flare: Island.flare(s))
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
             layoutContents(s)
@@ -515,7 +532,7 @@ private final class IslandView: NSView {
         pill.path = targetPath
         pill.add(boundsSpring, forKey: "bounds")
         pill.add(pathSpring, forKey: "path")
-        for shape in [clip, rim] {
+        for shape in [clip, rim, capsule] {
             shape.bounds = targetBounds
             shape.add(boundsSpring, forKey: "bounds")
         }
@@ -523,6 +540,14 @@ private final class IslandView: NSView {
         clip.add(pathSpring, forKey: "path")
         rim.path = rimPath
         rim.add(rimSpring, forKey: "path")
+        let edgePath = bottomEdgePath(size: target.size, cornerRadius: Island.cornerRadius(s), flare: Island.flare(s))
+        let edgeSpring = springAnimation(keyPath: "path", duration: duration, bounce: bounce)
+        edgeSpring.fromValue = capsule.path
+        edgeSpring.toValue = edgePath
+        edgeSpring.beginTime = CACurrentMediaTime() + contentLead
+        edgeSpring.fillMode = .backwards
+        capsule.path = edgePath
+        capsule.add(edgeSpring, forKey: "path")
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.bounds = targetBounds
         shadowLayer.shadowPath = targetPath
@@ -710,21 +735,17 @@ private final class IslandView: NSView {
             label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
         }
 
-        // Capsule line along the chin's bottom edge, spanning the straight
-        // run between the corner rounds. 60% armed, full when holding.
-        let inset = Island.flare(.open) + Island.cornerRadius(.open)
-        let lineY: CGFloat = 5
-        let linePath = CGMutablePath()
-        linePath.move(to: CGPoint(x: inset, y: lineY))
-        linePath.addLine(to: CGPoint(x: chinSize.width - inset, y: lineY))
-        capsule.frame = CGRect(origin: .zero, size: chinSize)
-        capsule.path = linePath
+        // Capsule: the outline's bottom run lights up — 60% when armed, taking
+        // the whole tap window so it is still arriving as the decision lands;
+        // full when a hold begins. One purple throughout.
         let fillTo: CGFloat
+        var fillDuration: CFTimeInterval = 0.3
         switch mode {
         case .armed:
-            capsule.strokeColor = WavePalette.dictate[1].cgColor
+            capsule.strokeColor = WavePalette.instruct[1].cgColor
             capsule.opacity = 1
             fillTo = 0.6
+            fillDuration = 0.45
         case .instruct:
             capsule.strokeColor = WavePalette.instruct[0].cgColor
             capsule.opacity = 1
@@ -738,7 +759,7 @@ private final class IslandView: NSView {
         let fill = CABasicAnimation(keyPath: "strokeEnd")
         fill.fromValue = capsule.presentation()?.strokeEnd ?? capsule.strokeEnd
         fill.toValue = fillTo
-        fill.duration = 0.35
+        fill.duration = fillDuration
         fill.timingFunction = CAMediaTimingFunction(name: .easeOut)
         capsule.strokeEnd = fillTo
         capsule.add(fill, forKey: "fill")

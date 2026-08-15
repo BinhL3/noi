@@ -25,7 +25,9 @@ use tauri::AppHandle;
 use crate::actions::{capture_refine_selection, refine_selection_now, ACTION_MAP};
 
 /// Two presses closer than this are one gesture.
-const TAP_WINDOW: Duration = Duration::from_millis(300);
+/// Long enough that the island's armed acknowledgement is seen arriving,
+/// short enough that a plain refine feels immediate next to the model call.
+const TAP_WINDOW: Duration = Duration::from_millis(450);
 
 struct Gesture {
     last_press: Option<Instant>,
