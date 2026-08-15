@@ -121,8 +121,8 @@ private func springAnimation(keyPath: String, duration: CFTimeInterval, bounce: 
 /// fixed and its bounds grow symmetrically about it. When positions were
 /// measured from the pill's left edge, any two springs that were not
 /// bit-identical showed as a horizontal slide mid-animation.
-private func islandPath(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat) -> CGPath {
-    let raw = islandPathLeftOrigin(size: size, cornerRadius: r, flare: f)
+private func islandPath(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat, closed: Bool = true) -> CGPath {
+    let raw = islandPathLeftOrigin(size: size, cornerRadius: r, flare: f, closed: closed)
     var shift = CGAffineTransform(translationX: -size.width / 2, y: 0)
     return raw.copy(using: &shift) ?? raw
 }
@@ -132,7 +132,11 @@ private func islandBounds(_ size: CGSize) -> CGRect {
     CGRect(x: -size.width / 2, y: 0, width: size.width, height: size.height)
 }
 
-private func islandPathLeftOrigin(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat) -> CGPath {
+/// `closed: false` leaves out the top edge — the segment along the screen
+/// edge — for stroking: the fill needs it, but a key line drawn there is a
+/// seam between the island and the housing, and lightens the island's top so
+/// it no longer matches the notch's black.
+private func islandPathLeftOrigin(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat, closed: Bool) -> CGPath {
     let w = size.width
     let h = size.height
     let path = CGMutablePath()
@@ -153,7 +157,7 @@ private func islandPathLeftOrigin(size: CGSize, cornerRadius r: CGFloat, flare f
     path.addLine(to: CGPoint(x: w - f, y: h - f))
     // Concave fillet back out to the edge.
     path.addQuadCurve(to: CGPoint(x: w, y: h), control: CGPoint(x: w - f, y: h))
-    path.closeSubpath()
+    if closed { path.closeSubpath() }
     return path
 }
 
@@ -283,8 +287,9 @@ private final class IslandView: NSView {
         // into the wallpaper and the menu bar; a hairline of light along its
         // edge is what separates it. Drawn just inside the outline so the
         // flares keep their crisp meeting with the screen edge.
-        rim.strokeColor = NSColor.white.withAlphaComponent(0.18).cgColor
-        rim.lineWidth = 1.5
+        rim.strokeColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        rim.lineWidth = 1
+        rim.lineCap = .butt
         rim.fillColor = NSColor.clear.cgColor
         layer?.addSublayer(pill)
 
@@ -356,8 +361,8 @@ private final class IslandView: NSView {
         )
     }
 
-    private func path(for size: CGSize, _ s: IslandState) -> CGPath {
-        islandPath(size: size, cornerRadius: Island.cornerRadius(s), flare: Island.flare(s))
+    private func path(for size: CGSize, _ s: IslandState, closed: Bool = true) -> CGPath {
+        islandPath(size: size, cornerRadius: Island.cornerRadius(s), flare: Island.flare(s), closed: closed)
     }
 
     /// The pill's current footprint plus hover slop, in view coordinates.
@@ -388,8 +393,9 @@ private final class IslandView: NSView {
             for shape in [clip, rim] {
                 shape.position = .zero
                 shape.bounds = targetBounds
-                shape.path = targetPath
             }
+            clip.path = targetPath
+            rim.path = path(for: target.size, s, closed: false)
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
             layoutContents(s)
@@ -411,6 +417,13 @@ private final class IslandView: NSView {
         pathSpring.fromValue = pill.path
         pathSpring.toValue = targetPath
 
+        // The rim strokes the outline minus the top edge; same spring, its
+        // own (unclosed) path.
+        let rimPath = path(for: target.size, s, closed: false)
+        let rimSpring = springAnimation(keyPath: "path", duration: duration, bounce: bounce)
+        rimSpring.fromValue = rim.path
+        rimSpring.toValue = rimPath
+
         let shadowSpring = springAnimation(keyPath: "shadowPath", duration: duration, bounce: bounce)
         shadowSpring.fromValue = shadowLayer.shadowPath
         shadowSpring.toValue = targetPath
@@ -419,7 +432,7 @@ private final class IslandView: NSView {
         // follows. Shrinking everything at once is what reads as "sudden" —
         // Apple's islands always retire the content a beat before the shape.
         let contentLead: CFTimeInterval = leavingOpen ? Island.contentOutLead : 0
-        for anim in [boundsSpring, pathSpring, shadowSpring] {
+        for anim in [boundsSpring, pathSpring, shadowSpring, rimSpring] {
             anim.beginTime = CACurrentMediaTime() + contentLead
             anim.fillMode = .backwards
         }
@@ -432,10 +445,12 @@ private final class IslandView: NSView {
         pill.add(pathSpring, forKey: "path")
         for shape in [clip, rim] {
             shape.bounds = targetBounds
-            shape.path = targetPath
             shape.add(boundsSpring, forKey: "bounds")
-            shape.add(pathSpring, forKey: "path")
         }
+        clip.path = targetPath
+        clip.add(pathSpring, forKey: "path")
+        rim.path = rimPath
+        rim.add(rimSpring, forKey: "path")
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.bounds = targetBounds
         shadowLayer.shadowPath = targetPath
