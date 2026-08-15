@@ -16,20 +16,52 @@ import QuartzCore
 
 // MARK: - Geometry
 
+/// Numbers come from docs/research/notch-ui-design.md §5: they are what
+/// boring.notch and DynamicNotchKit ship, checked against Apple's HIG.
 private enum Island {
     /// Collapsed: exactly the camera housing, so the pill is invisible at rest.
     static let restHeight: CGFloat = 0
     /// Expanded: housing plus a chin below it for content.
     static let chinHeight: CGFloat = 44
-    /// Grown slightly wider than the cutout when open, so the island reads as
-    /// pushing outward from behind the housing rather than merely dropping down.
-    static let openOverhang: CGFloat = 26
-    static let cornerRadius: CGFloat = 22
+    /// Collapsed body is a hair wider than the cutout so the anti-aliased seam
+    /// where the bezel meets the pixels never shows a light gap.
+    static let closedSlop: CGFloat = 4
+    /// Grown wider than the cutout when open, so the island reads as pushing
+    /// outward from behind the housing rather than merely dropping down.
+    static let openOverhang: CGFloat = 36
+
     /// The concave fillet where the island meets the top screen edge. This is
     /// what makes it the Dynamic Island shape rather than a pill: the top
     /// corners curve OUTWARD into the edge, like a trumpet bell, so the island
     /// appears to grow out of the surface instead of being stuck onto it.
-    static let flare: CGFloat = 12
+    /// Both radii grow with the island — a constant radius makes the closed
+    /// state look puffy and the open state look boxy.
+    static func flare(open: Bool) -> CGFloat { open ? 18 : 6 }
+    /// Bottom corner radius. Open = flare + 5, the ratio the reference apps use.
+    static func cornerRadius(open: Bool) -> CGFloat { open ? 23 : 14 }
+
+    /// Springs as Apple specifies them (WWDC23 "Animate with springs"):
+    /// perceptual duration + bounce, converted to CA's mass/stiffness/damping.
+    /// Opening carries a small bounce so it reads as physical; closing is
+    /// critically damped because springing back shut looks indecisive.
+    static let openDuration: CFTimeInterval = 0.42
+    static let openBounce: CGFloat = 0.22
+    static let closeDuration: CFTimeInterval = 0.42
+    static let closeBounce: CGFloat = 0
+}
+
+/// stiffness = (2π/d)², damping = 4π(1−bounce)/d, mass 1 — Apple's formulas.
+private func springAnimation(keyPath: String, duration: CFTimeInterval, bounce: CGFloat) -> CASpringAnimation {
+    let spring = CASpringAnimation(keyPath: keyPath)
+    spring.mass = 1
+    spring.stiffness = pow(2 * .pi / duration, 2)
+    spring.damping = 4 * .pi * (1 - bounce) / duration
+    spring.initialVelocity = 0
+    // CA snaps to the final value when `duration` elapses, so the animation
+    // must run to settle. The perceptual duration governs when we ORDER OUT
+    // (Apple: don't wait for settling), not how long the layer animates.
+    spring.duration = spring.settlingDuration
+    return spring
 }
 
 /// The island outline in layer coordinates (y-up, top edge at maxY).
@@ -69,6 +101,9 @@ private final class IslandView: NSView {
     private let shadowLayer = CALayer()
     /// Hairline light along the pill's edge, drawn above the contents.
     private let rim = CAShapeLayer()
+    /// Everything in the chin. Fades and scales in from the top edge as one
+    /// unit, so content is revealed by the island opening rather than popping.
+    private let content = CALayer()
     private let dot = CALayer()
     /// One layer per waveform bar. Levels arrive per audio callback and drive
     /// each bar's scaleY from a bottom anchor — the familiar voice-memo look.
@@ -108,11 +143,13 @@ private final class IslandView: NSView {
         // wallpaper) and a hairline rim catching light along the bottom edge.
         // The shadow lives on a dedicated layer UNDER the pill, because the
         // pill clips its contents and would clip its own shadow too.
+        // Only when open: at rest the island must read as hardware, and
+        // hardware does not cast a shadow onto the wallpaper.
         shadowLayer.backgroundColor = NSColor.clear.cgColor
         shadowLayer.shadowColor = NSColor.black.cgColor
-        shadowLayer.shadowOpacity = 0.45
-        shadowLayer.shadowRadius = 14
-        shadowLayer.shadowOffset = CGSize(width: 0, height: -6) // downward, y-up space
+        shadowLayer.shadowOpacity = 0
+        shadowLayer.shadowRadius = 8
+        shadowLayer.shadowOffset = CGSize(width: 0, height: -4) // downward, y-up space
         layer?.addSublayer(shadowLayer)
 
         rim.strokeColor = NSColor.white.withAlphaComponent(0.09).cgColor
@@ -120,20 +157,22 @@ private final class IslandView: NSView {
         rim.fillColor = NSColor.clear.cgColor
         layer?.addSublayer(pill)
 
+        content.anchorPoint = CGPoint(x: 0.5, y: 1) // scale from the housing edge
+        content.opacity = 0
+        pill.addSublayer(content)
+
         dot.backgroundColor = NSColor.systemPink.cgColor
         dot.cornerRadius = 3
-        dot.opacity = 0
-        pill.addSublayer(dot)
+        content.addSublayer(dot)
 
         for _ in 0..<Wave.count {
             let bar = CALayer()
             bar.backgroundColor = NSColor.white.withAlphaComponent(0.85).cgColor
             bar.cornerRadius = Wave.barWidth / 2
-            bar.opacity = 0
             // Anchor at the bottom so scaleY grows the bar upward from its
             // base, not outward from its middle.
             bar.anchorPoint = CGPoint(x: 0.5, y: 0)
-            pill.addSublayer(bar)
+            content.addSublayer(bar)
             bars.append(bar)
         }
 
@@ -152,9 +191,10 @@ private final class IslandView: NSView {
     /// AppKit's y axis points up, so the pill hangs from the top of the view.
     private func pillFrame(open: Bool) -> CGRect {
         // The frame includes the flares; the body is inset by flare per side,
-        // so the visible body still covers the cutout exactly when closed.
-        let flares = Island.flare * 2
-        let width = (open ? cutoutWidth + Island.openOverhang * 2 : cutoutWidth) + flares
+        // so the visible body still covers the cutout (plus slop) when closed.
+        let flares = Island.flare(open: open) * 2
+        let body = open ? cutoutWidth + Island.openOverhang * 2 : cutoutWidth + Island.closedSlop
+        let width = body + flares
         let height = safeAreaTop + (open ? Island.chinHeight : Island.restHeight)
         return CGRect(
             x: (bounds.width - width) / 2,
@@ -164,66 +204,64 @@ private final class IslandView: NSView {
         )
     }
 
+    private func path(for size: CGSize, open: Bool) -> CGPath {
+        islandPath(size: size, cornerRadius: Island.cornerRadius(open: open), flare: Island.flare(open: open))
+    }
+
     func layoutPill(open: Bool, animated: Bool) {
         let target = pillFrame(open: open)
+        let targetPath = path(for: target.size, open: open)
+        let shadowOpacity: Float = open ? 0.6 : 0
 
         guard animated else {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             pill.frame = target
-            pill.path = islandPath(size: target.size, cornerRadius: Island.cornerRadius, flare: Island.flare)
+            pill.path = targetPath
             shadowLayer.frame = target
-            shadowLayer.shadowPath = pill.path
+            shadowLayer.shadowPath = targetPath
+            shadowLayer.shadowOpacity = shadowOpacity
             layoutContents(in: target, open: open)
             CATransaction.commit()
             return
         }
 
-        // A spring, not an ease. Damping just under critical gives a single
-        // small overshoot — the thing that reads as physical rather than
-        // animated. Opening is looser than closing: springing back shut looks
-        // indecisive, so the close is stiffer and damped harder.
-        let spring = CASpringAnimation(keyPath: "bounds.size")
-        spring.mass = 1.0
-        spring.stiffness = open ? 260 : 340
-        spring.damping = open ? 22 : 30
-        spring.initialVelocity = 0
-        spring.fromValue = NSValue(size: pill.bounds.size)
-        spring.toValue = NSValue(size: target.size)
-        spring.duration = spring.settlingDuration
+        let duration = open ? Island.openDuration : Island.closeDuration
+        let bounce = open ? Island.openBounce : Island.closeBounce
 
-        let position = CASpringAnimation(keyPath: "position")
-        position.mass = spring.mass
-        position.stiffness = spring.stiffness
-        position.damping = spring.damping
+        // Bounds, position and path must ride the identical spring, or the
+        // flares visibly detach from the corners mid-animation and the shadow
+        // lags the pill.
+        let size = springAnimation(keyPath: "bounds.size", duration: duration, bounce: bounce)
+        size.fromValue = NSValue(size: pill.bounds.size)
+        size.toValue = NSValue(size: target.size)
+
+        let position = springAnimation(keyPath: "position", duration: duration, bounce: bounce)
         position.fromValue = NSValue(point: pill.position)
         position.toValue = NSValue(point: CGPoint(x: target.midX, y: target.midY))
-        position.duration = spring.duration
 
-        let targetPath = islandPath(size: target.size, cornerRadius: Island.cornerRadius, flare: Island.flare)
-        // The outline must morph on the same spring as the bounds, or the
-        // flares visibly detach from the corners mid-animation.
-        let pathSpring = CASpringAnimation(keyPath: "path")
-        pathSpring.mass = spring.mass
-        pathSpring.stiffness = spring.stiffness
-        pathSpring.damping = spring.damping
+        let pathSpring = springAnimation(keyPath: "path", duration: duration, bounce: bounce)
         pathSpring.fromValue = pill.path
         pathSpring.toValue = targetPath
-        pathSpring.duration = spring.duration
+
+        let shadowSpring = springAnimation(keyPath: "shadowPath", duration: duration, bounce: bounce)
+        shadowSpring.fromValue = shadowLayer.shadowPath
+        shadowSpring.toValue = targetPath
 
         CATransaction.begin()
-        CATransaction.setAnimationDuration(spring.duration)
+        CATransaction.setAnimationDuration(duration)
         pill.frame = target
         pill.path = targetPath
-        pill.add(spring, forKey: "bounds.size")
+        pill.add(size, forKey: "bounds.size")
         pill.add(position, forKey: "position")
         pill.add(pathSpring, forKey: "path")
-        // The shadow is a sibling layer (the pill would clip its own shadow),
-        // so it must ride the same spring or it visibly lags the pill.
+        // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.frame = target
         shadowLayer.shadowPath = targetPath
-        shadowLayer.add(spring, forKey: "bounds.size")
+        shadowLayer.shadowOpacity = shadowOpacity
+        shadowLayer.add(size, forKey: "bounds.size")
         shadowLayer.add(position, forKey: "position")
+        shadowLayer.add(shadowSpring, forKey: "shadowPath")
         layoutContents(in: target, open: open)
         CATransaction.commit()
     }
@@ -236,14 +274,24 @@ private final class IslandView: NSView {
         let centerY = chinHeight / 2
 
         rim.frame = CGRect(origin: .zero, size: pillRect.size)
-        rim.path = islandPath(size: pillRect.size, cornerRadius: Island.cornerRadius, flare: Island.flare)
+        rim.path = path(for: pillRect.size, open: open)
         rim.opacity = open ? 1 : 0
 
-        dot.frame = CGRect(x: Island.flare + 20, y: centerY - 3, width: 6, height: 6)
-        dot.opacity = open ? 1 : 0
+        // The chin, as a layer anchored to the housing's bottom edge. When
+        // closed the chin has no height, so we keep the open size and let
+        // opacity + scale do the hiding — a zero-size layer would make the
+        // reveal a snap instead of a morph.
+        let chinSize = CGSize(width: pillRect.width, height: max(chinHeight, Island.chinHeight))
+        content.bounds = CGRect(origin: .zero, size: chinSize)
+        content.position = CGPoint(x: pillRect.width / 2, y: chinHeight)
+        content.opacity = open ? 1 : 0
+        content.transform = open ? CATransform3DIdentity : CATransform3DMakeScale(1, 0.6, 1)
 
-        let waveLeft = (pillRect.width - Wave.totalWidth) / 2
-        let baseY = centerY - Wave.maxHeight / 2
+        let midY = chinSize.height / 2
+        dot.frame = CGRect(x: Island.flare(open: true) + 20, y: midY - 3, width: 6, height: 6)
+
+        let waveLeft = (chinSize.width - Wave.totalWidth) / 2
+        let baseY = midY - Wave.maxHeight / 2
         for (i, bar) in bars.enumerated() {
             // frame-setting resets anchored position, so place via bounds+position.
             bar.bounds = CGRect(x: 0, y: 0, width: Wave.barWidth, height: Wave.maxHeight)
@@ -254,7 +302,6 @@ private final class IslandView: NSView {
             if bar.transform.m22 == 0 {
                 bar.transform = CATransform3DMakeScale(1, 0.15, 1)
             }
-            bar.opacity = open ? 1 : 0
         }
     }
 
@@ -360,9 +407,10 @@ private final class IslandController {
     func hide() {
         guard let view else { return }
         view.layoutPill(open: false, animated: true)
-        // Order out only once the spring has settled, or the collapse is never
-        // seen. Matches the close spring's settling time.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+        // Order out once the close is perceptually done — Apple's rule is the
+        // perceptual duration, not the settling time — plus a hair so the
+        // last frame of a critically damped close is never cut.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Island.closeDuration + 0.05) { [weak self] in
             self?.panel?.orderOut(nil)
         }
     }
