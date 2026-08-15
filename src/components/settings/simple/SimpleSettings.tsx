@@ -20,9 +20,9 @@ import { useSettings } from "../../../hooks/useSettings";
  * Noi's settings: one column, four sections, the few things that matter.
  * Everything else lives in the full (Handy) settings, one link away.
  */
-export const SimpleSettings: React.FC<{ onShowFull: () => void }> = ({
-  onShowFull,
-}) => {
+export const SimpleSettings: React.FC<{
+  onShowFull: (section?: "models") => void;
+}> = ({ onShowFull }) => {
   const { t } = useTranslation();
   const { getSetting } = useSettings();
   const [showHistory, setShowHistory] = useState(false);
@@ -46,6 +46,15 @@ export const SimpleSettings: React.FC<{ onShowFull: () => void }> = ({
 
       <div className="mt-8">
         <ModelSettingsCard />
+        <div className="px-4 py-2">
+          <button
+            type="button"
+            className="text-sm text-logo-primary hover:underline cursor-pointer"
+            onClick={() => onShowFull("models")}
+          >
+            {t("simple.manageModels")}
+          </button>
+        </div>
       </div>
 
       <SimpleSection title={t("simple.refine")}>
@@ -79,7 +88,7 @@ export const SimpleSettings: React.FC<{ onShowFull: () => void }> = ({
         <button
           type="button"
           className="text-sm text-mid-gray hover:text-text cursor-pointer"
-          onClick={onShowFull}
+          onClick={() => onShowFull()}
         >
           {t("simple.advanced")}
         </button>

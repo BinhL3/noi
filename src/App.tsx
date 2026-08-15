@@ -314,7 +314,12 @@ function App() {
               <div className="flex flex-col items-center p-4 gap-4">
                 <AccessibilityPermissions />
                 <SecureInputWarning />
-                <SimpleSettings onShowFull={() => switchMode("full")} />
+                <SimpleSettings
+                  onShowFull={(section) => {
+                    if (section) setCurrentSection(section);
+                    switchMode("full");
+                  }}
+                />
               </div>
             </div>
           ) : (

@@ -692,6 +692,7 @@
     "showHistory": "Show transcripts",
     "hideHistory": "Hide transcripts",
     "advanced": "Advanced settings ›",
-    "backToSimple": "‹ Simple settings"
+    "backToSimple": "‹ Simple settings",
+    "manageModels": "Download or manage speech models ›"
   }
 }

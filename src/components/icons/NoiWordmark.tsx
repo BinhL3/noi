@@ -1,40 +1,46 @@
-/**
- * The Noi wordmark: an island glyph — the notch pill it lives in — followed by
- * the name in the system face. Inherits `currentColor` so it sits on glass in
- * either theme.
- */
+import mark from "../../assets/noi-mark.svg";
+
 /** The brand name is not UI copy; it is never translated. */
 const BRAND = "Noi";
 
+/**
+ * The Noi wordmark: the wave mark followed by the name in the system face.
+ * The mark keeps its own soft blues; the text inherits `currentColor`.
+ */
 const NoiWordmark = ({
   width = 120,
   className,
 }: {
   width?: number;
   className?: string;
-}) => (
-  <svg
-    viewBox="0 0 120 40"
-    width={width}
-    height={(width * 40) / 120}
-    className={className}
-    role="img"
-    aria-label="Noi"
-    fill="currentColor"
-  >
-    {/* Island: a pill with concave top flares, as on the screen. */}
-    <path d="M2 4 Q8 4 8 10 V20 A6 6 0 0 0 14 26 H32 A6 6 0 0 0 38 20 V10 Q38 4 44 4 Z" />
-    <text
-      x="52"
-      y="29"
-      fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif"
-      fontSize="27"
-      fontWeight="700"
-      letterSpacing="-0.5"
+}) => {
+  // The mark's artwork has generous padding; size it so the visible wave
+  // matches the cap height of the text.
+  const markSize = Math.round(width * 0.42);
+  const fontSize = Math.round(width * 0.24);
+  return (
+    <div
+      className={`inline-flex items-center gap-1 select-none ${className ?? ""}`}
+      style={{ width }}
+      role="img"
+      aria-label={BRAND}
     >
-      {BRAND}
-    </text>
-  </svg>
-);
+      <img
+        src={mark}
+        alt=""
+        width={markSize}
+        height={markSize}
+        style={{ marginLeft: -markSize * 0.18 }}
+        draggable={false}
+      />
+      <span
+        className="font-bold tracking-tight"
+        style={{ fontSize, lineHeight: 1 }}
+      >
+        {BRAND}
+      </span>
+    </div>
+  );
+};
 
 export default NoiWordmark;

@@ -1,11 +1,14 @@
 [package]
-name = "handy"
+# The package (and so the dev binary) is "noi": macOS names the app menu
+# ("About …") and the Dock entry after the running executable in dev, where
+# there is no bundle to take the product name from.
+name = "noi"
 version = "0.9.5"
-description = "Handy"
-authors = ["cjpais"]
+description = "Noi"
+authors = ["binhle", "cjpais"]
 edition = "2021"
 license = "MIT"
-default-run = "handy"
+default-run = "noi"
 
 [profile.dev]
 incremental = true # Compile your binary in smaller steps.
