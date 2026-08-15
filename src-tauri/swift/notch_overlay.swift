@@ -32,7 +32,8 @@ enum IslandMode: Equatable {
     case dictate
     case instruct
     /// Label plus the SF Symbol that says which kind of work: transcribing
-    /// shows a waveform (speech becoming text), refining the sparkle.
+    /// shows lines of text (speech becoming text — not a waveform, which now
+    /// means recording), refining the sparkle.
     case working(String, symbol: String)
     case done(ok: Bool)
 
@@ -1169,7 +1170,7 @@ public func notch_overlay_set_mode(_ mode: Int32) {
     let m: IslandMode
     switch mode {
     case 1: m = .instruct
-    case 2: m = .working("Transcribing…", symbol: "waveform")
+    case 2: m = .working("Transcribing…", symbol: "text.alignleft")
     case 3: m = .working("Refining…", symbol: "sparkles")
     default: m = .dictate
     }
