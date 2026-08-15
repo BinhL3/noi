@@ -36,6 +36,9 @@ pub enum EngineType {
     GigaAM,
     Canary,
     Cohere,
+    /// Apple's on-device SpeechAnalyzer (macOS 26+). Nothing to download; the
+    /// system fetches its own assets on first use.
+    AppleSpeech,
 }
 
 /// Where a model comes from and how Handy obtains it — the routing discriminant
@@ -1105,6 +1108,42 @@ impl ModelManager {
             },
         );
 
+        // Apple's on-device recogniser, when this build and machine have it.
+        // Zero bytes to download, so it is always "downloaded".
+        #[cfg(target_os = "macos")]
+        if crate::apple_speech::is_available() {
+            available_models.insert(
+                crate::apple_speech::MODEL_ID.to_string(),
+                ModelInfo {
+                    id: crate::apple_speech::MODEL_ID.to_string(),
+                    name: "Apple Speech".to_string(),
+                    description: "Apple's on-device dictation model (macOS 26). Nothing to download, runs on the Neural Engine, very fast.".to_string(),
+                    filename: String::new(),
+                    source: ModelSource::Local,
+                    size_mb: 0,
+                    is_downloaded: true,
+                    is_downloading: false,
+                    partial_size: 0,
+                    is_directory: false,
+                    engine_type: EngineType::AppleSpeech,
+                    accuracy_score: 0.85,
+                    speed_score: 0.98,
+                    supports_translation: false,
+                    is_recommended: true,
+                    supported_languages: vec![
+                        "en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "ar", "yue",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+                    supports_language_selection: true,
+                    is_custom: false,
+                    supports_streaming: false,
+                    supports_language_detection: false,
+                },
+            );
+        }
+
         // Seed the bundled offline catalog before the on-disk scans, so a model
         // already in the HF cache dedups onto its richer catalog entry (the scans
         // only insert ids not already present) instead of showing as a bare cache
@@ -1370,6 +1409,13 @@ impl ModelManager {
         let mut vanished_alternates: Vec<String> = Vec::new();
 
         for model in models.values_mut() {
+            if matches!(model.engine_type, EngineType::AppleSpeech) {
+                // System engine: nothing on disk to check.
+                model.is_downloaded = true;
+                model.is_downloading = false;
+                model.partial_size = 0;
+                continue;
+            }
             if let ModelSource::HuggingFace { repo_id, revision } = &model.source {
                 // A models-dir copy counts too: mirror-fallback downloads land
                 // there, and it makes manual drop-ins of catalog files work.

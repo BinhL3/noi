@@ -188,6 +188,9 @@ enum LoadedEngine {
     GigaAM(GigaAMModel),
     Canary(CanaryModel),
     Cohere(CohereModel),
+    /// Apple's on-device SpeechAnalyzer; nothing is held, the system owns it.
+    #[cfg(target_os = "macos")]
+    AppleSpeech,
 }
 
 /// RAII guard that clears the `is_loading` flag and notifies waiters on drop.
@@ -517,7 +520,12 @@ impl TranscriptionManager {
             return Err(anyhow::anyhow!(error_msg));
         }
 
-        let model_path = self.model_manager.get_model_path(model_id)?;
+        // The system engine has no file; every other engine needs its path.
+        let model_path = if matches!(model_info.engine_type, EngineType::AppleSpeech) {
+            std::path::PathBuf::new()
+        } else {
+            self.model_manager.get_model_path(model_id)?
+        };
 
         // Drop the current engine BEFORE building the new one so transcribe-cpp
         // frees the previous native context first — avoids holding two models at
@@ -678,6 +686,18 @@ impl TranscriptionManager {
                     anyhow::anyhow!(error_msg)
                 })?;
                 LoadedEngine::Cohere(engine)
+            }
+            #[cfg(target_os = "macos")]
+            EngineType::AppleSpeech => {
+                let language = get_settings(&self.app_handle).selected_language;
+                crate::apple_speech::prepare(&language);
+                LoadedEngine::AppleSpeech
+            }
+            #[cfg(not(target_os = "macos"))]
+            EngineType::AppleSpeech => {
+                let error_msg = "Apple Speech is only available on macOS".to_string();
+                emit_loading_failed(&error_msg);
+                anyhow::bail!(error_msg)
             }
         };
 
@@ -1402,6 +1422,15 @@ impl TranscriptionManager {
                             .transcribe(&audio, &options)
                             .map(|r| r.text)
                             .map_err(|e| anyhow::anyhow!("Cohere transcription failed: {}", e))
+                    }
+                    #[cfg(target_os = "macos")]
+                    LoadedEngine::AppleSpeech => {
+                        applied_language_hint = if validated_language == "auto" {
+                            None
+                        } else {
+                            Some(validated_language.clone())
+                        };
+                        crate::apple_speech::transcribe(&audio, 16_000, &validated_language)
                     }
                 }
             }));
