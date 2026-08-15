@@ -264,9 +264,16 @@ private final class IslandView: NSView {
         shadowLayer.shadowOffset = CGSize(width: 0, height: -5) // downward, y-up space
         layer?.addSublayer(shadowLayer)
 
-        // Everything hangs from the top-centre of the view. See islandPath.
-        for l in [pill, shadowLayer, clip, rim] as [CALayer] {
+        // The pill and its shadow hang from the top-centre of the view. Inside
+        // the pill, local y = 0 is the bottom edge and y = h the top; the mask
+        // and rim are anchored at bottom-centre, position (0, 0), so their
+        // bounds (0...h) coincide with the pill's at every height with no
+        // position to animate. See islandPath.
+        for l in [pill, shadowLayer] as [CALayer] {
             l.anchorPoint = CGPoint(x: 0.5, y: 1)
+        }
+        for l in [clip, rim] as [CALayer] {
+            l.anchorPoint = CGPoint(x: 0.5, y: 0)
         }
 
         clip.fillColor = NSColor.black.cgColor
