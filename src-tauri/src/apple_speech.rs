@@ -14,6 +14,7 @@ unsafe extern "C" {
         count: usize,
         sample_rate: i32,
         locale: *const std::os::raw::c_char,
+        vocabulary: *const std::os::raw::c_char,
     ) -> *mut std::os::raw::c_char;
     fn apple_speech_free(text: *mut std::os::raw::c_char);
     fn apple_speech_prepare(locale: *const std::os::raw::c_char);
@@ -40,17 +41,24 @@ pub fn is_available() -> bool {
 
 /// Transcribe 16 kHz mono float samples. `language` is Handy's code ("en",
 /// "auto"); the Swift side maps it to a supported locale.
-pub fn transcribe(samples: &[f32], sample_rate: u32, language: &str) -> anyhow::Result<String> {
+pub fn transcribe(
+    samples: &[f32],
+    sample_rate: u32,
+    language: &str,
+    vocabulary: &[String],
+) -> anyhow::Result<String> {
     if !is_available() {
         anyhow::bail!("Apple Speech is not available on this system");
     }
     let locale = CString::new(language).unwrap_or_default();
+    let vocab = CString::new(vocabulary.join("\n")).unwrap_or_default();
     let ptr = unsafe {
         apple_speech_transcribe(
             samples.as_ptr(),
             samples.len(),
             sample_rate as i32,
             locale.as_ptr(),
+            vocab.as_ptr(),
         )
     };
     if ptr.is_null() {

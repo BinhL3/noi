@@ -1430,7 +1430,12 @@ impl TranscriptionManager {
                         } else {
                             Some(validated_language.clone())
                         };
-                        crate::apple_speech::transcribe(&audio, 16_000, &validated_language)
+                        crate::apple_speech::transcribe(
+                            &audio,
+                            16_000,
+                            &validated_language,
+                            &settings.custom_words,
+                        )
                     }
                 }
             }));

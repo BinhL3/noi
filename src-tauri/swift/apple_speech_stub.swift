@@ -6,7 +6,8 @@ public func apple_speech_available() -> Int32 { 0 }
 
 @_cdecl("apple_speech_transcribe")
 public func apple_speech_transcribe(
-    _ samples: UnsafePointer<Float>?, _ count: Int, _ sampleRate: Int32, _ locale: UnsafePointer<CChar>?
+    _ samples: UnsafePointer<Float>?, _ count: Int, _ sampleRate: Int32, _ locale: UnsafePointer<CChar>?,
+    _ vocabulary: UnsafePointer<CChar>?
 ) -> UnsafeMutablePointer<CChar>? { nil }
 
 @_cdecl("apple_speech_prepare")

@@ -970,6 +970,13 @@ pub fn run(cli_args: CliArgs) {
                 settings.overlay_style != settings::OverlayStyle::None,
             );
 
+            // The app should know its owner's name without being told: seed
+            // the account's full name into custom words once, so "Binley"
+            // comes out as "Binh Le" from the first dictation. The onboarding
+            // introduce-yourself step refines this; this is the floor.
+            #[cfg(target_os = "macos")]
+            seed_owner_name(app.handle());
+
             // The native island sits at rest over the housing and answers
             // hover, so it should be resident from launch, not from the
             // first recording.
@@ -1092,5 +1099,38 @@ fn migrate_legacy_app_data(app: &AppHandle) {
             "Could not migrate app data from {}: {e}; starting fresh",
             old_dir.display()
         ),
+    }
+}
+
+/// Add the macOS account's full name (and first name, if it is a real word's
+/// length) to custom words, once. Idempotent; never removes anything.
+#[cfg(target_os = "macos")]
+fn seed_owner_name(app: &AppHandle) {
+    let full = objc2_foundation::NSFullUserName().to_string();
+    let full = full.trim();
+    if full.is_empty() || full.eq_ignore_ascii_case("user") {
+        return;
+    }
+    let mut settings = get_settings(app);
+    let mut candidates: Vec<String> = vec![full.to_string()];
+    if let Some(first) = full.split_whitespace().next() {
+        if first.chars().count() >= 3 && first != full {
+            candidates.push(first.to_string());
+        }
+    }
+    let mut changed = false;
+    for name in candidates {
+        let known = settings
+            .custom_words
+            .iter()
+            .any(|w| w.eq_ignore_ascii_case(&name));
+        if !known {
+            settings.custom_words.push(name);
+            changed = true;
+        }
+    }
+    if changed {
+        log::info!("Seeded owner name into custom words");
+        settings::write_settings(app, settings);
     }
 }

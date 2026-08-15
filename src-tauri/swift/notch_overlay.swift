@@ -32,7 +32,7 @@ enum IslandMode: Equatable {
     case dictate
     case instruct
     /// The refine key was tapped once: the island acknowledges — sparkle,
-    /// "Refine", the capsule line part-filled — and waits out the tap window
+    /// "Refine · hold to describe a change" — and waits out the tap window
     /// to see whether a hold follows (→ instruct) or not (→ working).
     case armed
     /// Label plus the SF Symbol that says which kind of work: transcribing
@@ -215,10 +215,9 @@ private final class IslandView: NSView {
     private let checkStroke = CAShapeLayer()
     /// Status text for working/done ("Refining…", "Done").
     private let label = CATextLayer()
-    /// The capsule line: a thin stroke along the bottom of the chin that
-    /// fills to 60% when the refine key is armed and completes, in lavender,
-    /// when a hold begins — the "armed → committed" acknowledgement.
-    private let capsule = CAShapeLayer()
+    /// Halo behind the sparkle for the armed acknowledgement: a soft lavender
+    /// disc that blooms once as the sparkle pops in.
+    private let halo = CALayer()
     /// A band of light sweeping through the working label — the system's
     /// "thinking" shimmer — so a wait reads as alive rather than stuck.
     private let shimmer = CAGradientLayer()
@@ -381,16 +380,9 @@ private final class IslandView: NSView {
         label.truncationMode = .end
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
 
-        // On the outline itself — the whole open silhouette, flares to flares
-        // — inside the pill's mask: half the stroke is clipped, so it reads as
-        // the island's edge lighting up, not a bar drawn on it.
-        capsule.fillColor = NSColor.clear.cgColor
-        capsule.lineWidth = 4
-        capsule.lineCap = .round
-        capsule.strokeEnd = 0
-        capsule.opacity = 0
-        capsule.anchorPoint = CGPoint(x: 0.5, y: 0)
-        pill.addSublayer(capsule)
+        halo.backgroundColor = WavePalette.instruct[0].withAlphaComponent(0.35).cgColor
+        halo.opacity = 0
+        content.insertSublayer(halo, at: 0)
         content.addSublayer(label)
 
         shimmer.startPoint = CGPoint(x: 0, y: 0.5)
@@ -466,13 +458,12 @@ private final class IslandView: NSView {
                 l.bounds = targetBounds
             }
             pill.path = targetPath
-            for shape in [clip, rim, capsule] {
+            for shape in [clip, rim] {
                 shape.position = .zero
                 shape.bounds = targetBounds
             }
             clip.path = targetPath
             rim.path = path(for: target.size, s, closed: false)
-            capsule.path = rim.path
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
             layoutContents(s)
@@ -520,7 +511,7 @@ private final class IslandView: NSView {
         pill.path = targetPath
         pill.add(boundsSpring, forKey: "bounds")
         pill.add(pathSpring, forKey: "path")
-        for shape in [clip, rim, capsule] {
+        for shape in [clip, rim] {
             shape.bounds = targetBounds
             shape.add(boundsSpring, forKey: "bounds")
         }
@@ -528,10 +519,6 @@ private final class IslandView: NSView {
         clip.add(pathSpring, forKey: "path")
         rim.path = rimPath
         rim.add(rimSpring, forKey: "path")
-        // The capsule traces the whole open outline — the rim's path — so the
-        // island itself lights up from the top-left flare, down, around and up.
-        capsule.path = rimPath
-        capsule.add(rimSpring, forKey: "path")
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.bounds = targetBounds
         shadowLayer.shadowPath = targetPath
@@ -665,7 +652,7 @@ private final class IslandView: NSView {
         switch mode {
         case .dictate: symbolName = ""
         case .instruct: symbolName = "sparkles"; text = "Describe your change"
-        case .armed: symbolName = "sparkles"; text = "Refine"
+        case .armed: symbolName = "sparkles"; text = "Refine · hold to describe a change"
         case .working(let s, let sym): symbolName = sym; text = s
         case .done(let ok): symbolName = ok ? "" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
         }
@@ -719,34 +706,36 @@ private final class IslandView: NSView {
             label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
         }
 
-        // Capsule: the outline's bottom run lights up — 60% when armed, taking
-        // the whole tap window so it is still arriving as the decision lands;
-        // full when a hold begins. One purple throughout.
-        let fillTo: CGFloat
-        var fillDuration: CFTimeInterval = 0.3
-        switch mode {
-        case .armed:
-            capsule.strokeColor = WavePalette.instruct[1].cgColor
-            capsule.opacity = 1
-            fillTo = 0.6
-            fillDuration = 0.45
-        case .instruct:
-            capsule.strokeColor = WavePalette.instruct[0].cgColor
-            capsule.opacity = 1
-            fillTo = 1
-        default:
-            capsule.opacity = 0
-            fillTo = 0
+        // Armed: the sparkle pops in (spring, slight overshoot) with a soft
+        // halo that blooms once behind it — "I heard you; hold to say a
+        // change". Instruct: the sparkle has already morphed into the wave
+        // (see setMode); nothing extra here.
+        if mode == .armed {
+            let d = Glyph.symbolSize * 2.6
+            halo.bounds = CGRect(x: 0, y: 0, width: d, height: d)
+            halo.cornerRadius = d / 2
+            halo.position = CGPoint(x: symbol.frame.midX, y: symbol.frame.midY)
+            if symbol.animation(forKey: "pop") == nil {
+                let pop = CASpringAnimation(keyPath: "transform.scale")
+                pop.fromValue = 0.4
+                pop.toValue = 1
+                pop.mass = 1; pop.stiffness = 300; pop.damping = 16
+                pop.duration = pop.settlingDuration
+                symbol.add(pop, forKey: "pop")
+
+                let bloomScale = CABasicAnimation(keyPath: "transform.scale")
+                bloomScale.fromValue = 0.3
+                bloomScale.toValue = 1.15
+                let bloomFade = CAKeyframeAnimation(keyPath: "opacity")
+                bloomFade.values = [0, 0.9, 0]
+                bloomFade.keyTimes = [0, 0.3, 1]
+                let bloom = CAAnimationGroup()
+                bloom.animations = [bloomScale, bloomFade]
+                bloom.duration = 0.6
+                bloom.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                halo.add(bloom, forKey: "bloom")
+            }
         }
-        // Layout runs with actions disabled; the fill is the whole point of
-        // this line, so it animates explicitly from wherever it was.
-        let fill = CABasicAnimation(keyPath: "strokeEnd")
-        fill.fromValue = capsule.presentation()?.strokeEnd ?? capsule.strokeEnd
-        fill.toValue = fillTo
-        fill.duration = fillDuration
-        fill.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        capsule.strokeEnd = fillTo
-        capsule.add(fill, forKey: "fill")
 
         // Working: the sparkle breathes and light sweeps through the label, so
         // a long call still reads as alive.
@@ -842,6 +831,7 @@ private final class IslandView: NSView {
         // generic "recording" (dictate) arrives a beat before "instruct" and
         // would flash the plain wave. Skip it; instruct follows at once.
         if mode == .armed, m == .dictate { return }
+        let armedToInstruct = mode == .armed && m == .instruct
         let wasRecording = mode.isRecording
         mode = m
         modeGeneration += 1
@@ -865,6 +855,19 @@ private final class IslandView: NSView {
             CATransaction.setDisableActions(true)
             self.layoutCluster(in: chinSize)
             CATransaction.commit()
+            if armedToInstruct {
+                // The sparkle becomes the wave: the wave grows out of where
+                // the sparkle was, on a spring, so the commit reads as one
+                // thing turning into another rather than a swap.
+                for wave in self.waveLayers {
+                    let grow = CASpringAnimation(keyPath: "transform.scale")
+                    grow.fromValue = 0.2
+                    grow.toValue = 1
+                    grow.mass = 1; grow.stiffness = 260; grow.damping = 20
+                    grow.duration = grow.settlingDuration
+                    wave.add(grow, forKey: "grow")
+                }
+            }
         }
 
         // Recording → anything else while open: let the wave settle first.

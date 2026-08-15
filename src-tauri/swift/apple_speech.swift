@@ -78,13 +78,20 @@ private enum AppleSpeech {
         _ = try await warm(for: localeTag, sourceFormat: f)
     }
 
-    static func transcribe(samples: [Float], sampleRate: Double, localeTag: String) async throws -> String {
+    static func transcribe(samples: [Float], sampleRate: Double, localeTag: String, vocabulary: [String]) async throws -> String {
         guard let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false) else {
             throw NSError(domain: "AppleSpeech", code: 1, userInfo: [NSLocalizedDescriptionKey: "bad source format"])
         }
         let warm = try await warm(for: localeTag, sourceFormat: sourceFormat)
         let transcriber = SpeechTranscriber(locale: warm.locale, preset: .transcription)
         let analyzer = SpeechAnalyzer(modules: [transcriber])
+        // Names and terms the user has taught the app bias recognition
+        // directly, instead of being repaired afterwards.
+        if !vocabulary.isEmpty {
+            let context = AnalysisContext()
+            context.contextualStrings = [.general: vocabulary]
+            try await analyzer.setContext(context)
+        }
 
         // Our samples → the analyzer's preferred format.
         guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(samples.count))
@@ -146,18 +153,21 @@ public func apple_speech_available() -> Int32 {
 
 @_cdecl("apple_speech_transcribe")
 public func apple_speech_transcribe(
-    _ samples: UnsafePointer<Float>?, _ count: Int, _ sampleRate: Int32, _ locale: UnsafePointer<CChar>?
+    _ samples: UnsafePointer<Float>?, _ count: Int, _ sampleRate: Int32, _ locale: UnsafePointer<CChar>?,
+    _ vocabulary: UnsafePointer<CChar>?
 ) -> UnsafeMutablePointer<CChar>? {
     guard #available(macOS 26.0, *), let samples, count > 0 else { return nil }
     let audio = Array(UnsafeBufferPointer(start: samples, count: count))
     let tag = locale.map { String(cString: $0) } ?? ""
+    let words = (vocabulary.map { String(cString: $0) } ?? "")
+        .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
     let rate = Double(sampleRate)
 
     let done = DispatchSemaphore(value: 0)
     var out: String?
     Task.detached(priority: .userInitiated) {
         do {
-            out = try await AppleSpeech.transcribe(samples: audio, sampleRate: rate, localeTag: tag)
+            out = try await AppleSpeech.transcribe(samples: audio, sampleRate: rate, localeTag: tag, vocabulary: words)
         } catch {
             NSLog("[apple-speech] transcription failed: \(error)")
         }
