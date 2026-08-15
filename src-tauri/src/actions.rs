@@ -428,6 +428,45 @@ const INSTRUCT_SELECTION_PROMPT: &str = "<text>\n${output}\n</text>\n\nThe user 
 static PENDING_SELECTION: Lazy<std::sync::Mutex<Option<String>>> =
     Lazy::new(|| std::sync::Mutex::new(None));
 
+/// Copy the current selection into the refine slot. `false` means nothing was
+/// selected: this gesture means "operate on the selection", so the caller must
+/// do nothing rather than silently turning into plain dictation and dumping
+/// text at the cursor.
+#[cfg(target_os = "macos")]
+pub(crate) fn capture_refine_selection(app: &AppHandle) -> bool {
+    let mut enigo = match enigo::Enigo::new(&enigo::Settings::default()) {
+        Ok(enigo) => enigo,
+        Err(e) => {
+            warn!("Refine-on-selection: could not create input handle: {e}");
+            return false;
+        }
+    };
+    match crate::selection::capture_selection(&mut enigo) {
+        Some(captured) => {
+            if let Ok(mut slot) = PENDING_SELECTION.lock() {
+                *slot = Some(captured.text);
+            }
+            true
+        }
+        None => {
+            debug!("Refine-on-selection: nothing selected, ignoring");
+            play_feedback_sound(app, SoundType::Stop);
+            false
+        }
+    }
+}
+
+/// Refine whatever is in the slot right now, with no recording at all — the
+/// single-tap gesture. Async so the shortcut thread is not blocked on the LLM.
+#[cfg(target_os = "macos")]
+pub(crate) fn refine_selection_now(app: &AppHandle) {
+    let ah = app.clone();
+    tauri::async_runtime::spawn(async move {
+        refine_selection_silently(&ah).await;
+        utils::hide_recording_overlay(&ah);
+    });
+}
+
 /// The silent half of refine-on-selection: the user held the key, said nothing,
 /// and expects the selection cleaned up with their configured prompt.
 ///
@@ -592,29 +631,8 @@ impl ShortcutAction for TranscribeAction {
         // Capture the selection before anything else: the moment we show an
         // overlay or the user moves on, the frontmost app may lose it.
         #[cfg(target_os = "macos")]
-        if self.use_selection {
-            let mut enigo = match enigo::Enigo::new(&enigo::Settings::default()) {
-                Ok(enigo) => enigo,
-                Err(e) => {
-                    warn!("Refine-on-selection: could not create input handle: {e}");
-                    return;
-                }
-            };
-            match crate::selection::capture_selection(&mut enigo) {
-                Some(captured) => {
-                    if let Ok(mut slot) = PENDING_SELECTION.lock() {
-                        *slot = Some(captured.text);
-                    }
-                }
-                None => {
-                    // Nothing selected. This shortcut means "operate on the
-                    // selection", so do nothing rather than silently turning
-                    // into plain dictation and dumping text at the cursor.
-                    debug!("Refine-on-selection: nothing selected, ignoring");
-                    play_feedback_sound(app, SoundType::Stop);
-                    return;
-                }
-            }
+        if self.use_selection && !capture_refine_selection(app) {
+            return;
         }
 
         // Load model in the background

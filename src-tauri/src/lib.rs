@@ -20,6 +20,8 @@ mod notch;
 mod overlay;
 mod paste_tx;
 pub mod portable;
+#[cfg(target_os = "macos")]
+mod refine_gesture;
 mod secure_input;
 #[cfg(target_os = "macos")]
 mod selection;

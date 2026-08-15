@@ -52,6 +52,15 @@ pub fn handle_shortcut_event(
         return;
     };
 
+    // The refine key reads taps, not holds; see refine_gesture.
+    #[cfg(target_os = "macos")]
+    if binding_id == "refine_selection" {
+        if is_pressed {
+            crate::refine_gesture::press(app, binding_id, hotkey_string);
+        }
+        return;
+    }
+
     // Cancel binding: only fires when recording and key is pressed
     if binding_id == "cancel" {
         let audio_manager = app.state::<Arc<AudioRecordingManager>>();
