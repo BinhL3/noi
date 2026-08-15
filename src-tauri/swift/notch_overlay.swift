@@ -200,10 +200,6 @@ private final class IslandView: NSView {
     /// Elapsed time, right of the wave, as Voice Memos pairs them. Digits
     /// are monospaced so the label doesn't jitter as they tick.
     private let timer = CATextLayer()
-    /// The Voice Memos recording control: a red rounded square inside a thin
-    /// white ring. It is the one glyph that says "recording" without a word.
-    private let glyphRing = CAShapeLayer()
-    private let glyphSquare = CALayer()
     /// SF Symbol glyphs for the non-dictation modes: sparkles for instruct
     /// and working, a check or an x for done.
     private let symbol = CALayer()
@@ -229,8 +225,6 @@ private final class IslandView: NSView {
         static let rerollInterval: TimeInterval = 0.3
         /// A whisper of motion at silence, so the wave reads as listening.
         static let idlePower: CGFloat = 0.06
-        /// Voice Memos red, kept for the record glyph in dictate mode.
-        static let tint = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
     }
     /// The three wave colours per mode: brand blues for dictation, lavender
     /// for an instruction, so the two still read differently at a glance.
@@ -261,10 +255,6 @@ private final class IslandView: NSView {
     }
     private enum Glyph {
         static let symbolSize: CGFloat = 20
-        static let ringDiameter: CGFloat = 22
-        static let ringWidth: CGFloat = 1.5
-        static let squareSide: CGFloat = 9
-        static let squareRadius: CGFloat = 2.5
     }
     /// Space between glyph, wave and timer. The three are laid out as one
     /// centred cluster — content pinned to opposite walls read as two
@@ -351,14 +341,6 @@ private final class IslandView: NSView {
         }
 
 
-        glyphRing.fillColor = NSColor.clear.cgColor
-        glyphRing.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
-        glyphRing.lineWidth = Glyph.ringWidth
-        content.addSublayer(glyphRing)
-        glyphSquare.backgroundColor = Wave.tint.cgColor
-        glyphSquare.cornerRadius = Glyph.squareRadius
-        content.addSublayer(glyphSquare)
-
         checkDisc.fillColor = NSColor.systemGreen.cgColor
         checkDisc.isHidden = true
         content.addSublayer(checkDisc)
@@ -394,7 +376,7 @@ private final class IslandView: NSView {
         timer.string = "0:00"
         timer.font = Text.font
         timer.fontSize = Text.font.pointSize
-        timer.foregroundColor = Wave.tint.cgColor
+        timer.foregroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
         timer.alignmentMode = .left
         timer.truncationMode = .none
         timer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
@@ -613,7 +595,6 @@ private final class IslandView: NSView {
         let midY = chinSize.height / 2
         let textHeight = ceil(Text.font.ascender - Text.font.descender)
         let recording = mode.isRecording
-        let usesRing = mode == .dictate
 
         // Tint everything that carries the mode colour.
         let tint: NSColor
@@ -628,20 +609,17 @@ private final class IslandView: NSView {
         // The clock reads in white beside a coloured wave; the record glyph
         // keeps its red — the one universally understood "recording" cue.
         timer.foregroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
-        glyphSquare.backgroundColor = tint.cgColor
 
         // Which members are present.
-        glyphRing.isHidden = !usesRing
-        glyphSquare.isHidden = !usesRing
+        // Recording modes are the wave and the clock, nothing else: the wave
+        // is the recording indicator. Glyphs belong to working/done.
         let isCheck = mode == .done(ok: true)
-        symbol.isHidden = usesRing || isCheck
+        symbol.isHidden = recording || isCheck
         checkDisc.isHidden = !isCheck
         checkStroke.isHidden = !isCheck
         for wave in waveLayers { wave.isHidden = !recording; wave.opacity = 1 }
         timer.isHidden = !recording
         timer.opacity = 1
-        glyphRing.opacity = 1
-        glyphSquare.opacity = 1
         symbol.opacity = 1
         label.isHidden = recording
 
@@ -662,27 +640,20 @@ private final class IslandView: NSView {
         label.string = text
         CATransaction.commit()
 
-        // Measure the cluster.
-        let glyphWidth = usesRing ? Glyph.ringDiameter : Glyph.symbolSize
+        // Measure the cluster: recording = wave · clock; otherwise glyph · label.
+        let glyphWidth = Glyph.symbolSize
         let labelWidth = text.isEmpty ? 0 : ceil((text as NSString).size(withAttributes: [.font: Text.font]).width) + 2
-        let clusterWidth = glyphWidth + gap + (recording ? Wave.totalWidth + gap + Text.width : labelWidth)
+        let clusterWidth = recording ? Wave.totalWidth + gap + Text.width : glyphWidth + gap + labelWidth
         var x = (chinSize.width - clusterWidth) / 2
 
-        // Glyph.
-        let glyphRect = CGRect(x: x, y: midY - glyphWidth / 2, width: glyphWidth, height: glyphWidth)
-        glyphRing.frame = glyphRect
-        glyphRing.path = CGPath(ellipseIn: CGRect(origin: .zero, size: glyphRect.size).insetBy(dx: Glyph.ringWidth / 2, dy: Glyph.ringWidth / 2), transform: nil)
-        glyphSquare.frame = CGRect(
-            x: glyphRect.midX - Glyph.squareSide / 2,
-            y: glyphRect.midY - Glyph.squareSide / 2,
-            width: Glyph.squareSide,
-            height: Glyph.squareSide
-        )
-        symbol.frame = glyphRect
-        if isCheck {
-            layoutCheck(in: glyphRect)
+        if !recording {
+            let glyphRect = CGRect(x: x, y: midY - glyphWidth / 2, width: glyphWidth, height: glyphWidth)
+            symbol.frame = glyphRect
+            if isCheck {
+                layoutCheck(in: glyphRect)
+            }
+            x += glyphWidth + gap
         }
-        x += glyphWidth + gap
 
         if recording {
             waveRect = CGRect(x: x, y: midY - Wave.maxHeight / 2, width: Wave.totalWidth, height: Wave.maxHeight)
@@ -826,8 +797,6 @@ private final class IslandView: NSView {
         wavePowerTarget = 0
         for wave in waveLayers { wave.opacity = 0.35 }
         timer.opacity = 0
-        glyphRing.opacity = 0
-        glyphSquare.opacity = 0
         symbol.opacity = 0
         CATransaction.commit()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.releaseSettle * 0.85, execute: reveal)
