@@ -193,6 +193,9 @@ private final class IslandView: NSView {
     private let symbol = CALayer()
     /// Status text for working/done ("Refining…", "Done").
     private let label = CATextLayer()
+    /// A band of light sweeping through the working label — the system's
+    /// "thinking" shimmer — so a wait reads as alive rather than stuck.
+    private let shimmer = CAGradientLayer()
     private(set) var mode: IslandMode = .dictate
     private var timerTick: Timer?
     private var recordingStart: Date?
@@ -325,6 +328,15 @@ private final class IslandView: NSView {
         label.truncationMode = .end
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         content.addSublayer(label)
+
+        shimmer.startPoint = CGPoint(x: 0, y: 0.5)
+        shimmer.endPoint = CGPoint(x: 1, y: 0.5)
+        shimmer.colors = [
+            NSColor.white.withAlphaComponent(0.55).cgColor,
+            NSColor.white.cgColor,
+            NSColor.white.withAlphaComponent(0.55).cgColor,
+        ]
+        shimmer.locations = [0.35, 0.5, 0.65]
 
         timer.string = "0:00"
         timer.font = Text.font
@@ -557,8 +569,12 @@ private final class IslandView: NSView {
         glyphRing.isHidden = !usesRing
         glyphSquare.isHidden = !usesRing
         symbol.isHidden = usesRing
-        for bar in bars { bar.isHidden = !recording }
+        for bar in bars { bar.isHidden = !recording; bar.opacity = 1 }
         timer.isHidden = !recording
+        timer.opacity = 1
+        glyphRing.opacity = 1
+        glyphSquare.opacity = 1
+        symbol.opacity = 1
         label.isHidden = recording
 
         // Symbol image + label text for the mode.
@@ -612,8 +628,23 @@ private final class IslandView: NSView {
             label.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: labelWidth, height: textHeight)
         }
 
-        // Working: the sparkle breathes so a long LLM call still reads as alive.
+        // Working: the sparkle breathes and light sweeps through the label, so
+        // a long call still reads as alive.
         if case .working = mode {
+            // The gradient is three label-widths wide and slides one width per
+            // cycle, so the bright band crosses the text left to right.
+            let w = max(labelWidth, 1)
+            shimmer.frame = CGRect(x: -w, y: 0, width: w * 3, height: label.bounds.height)
+            label.mask = shimmer
+            if shimmer.animation(forKey: "sweep") == nil {
+                let sweep = CABasicAnimation(keyPath: "position.x")
+                sweep.fromValue = shimmer.position.x - w
+                sweep.toValue = shimmer.position.x + w
+                sweep.duration = 1.4
+                sweep.repeatCount = .infinity
+                sweep.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                shimmer.add(sweep, forKey: "sweep")
+            }
             if symbol.animation(forKey: "breathe") == nil {
                 let breathe = CABasicAnimation(keyPath: "opacity")
                 breathe.fromValue = 1
@@ -626,6 +657,8 @@ private final class IslandView: NSView {
             }
         } else {
             symbol.removeAnimation(forKey: "breathe")
+            shimmer.removeAnimation(forKey: "sweep")
+            label.mask = nil
         }
     }
 
@@ -642,26 +675,58 @@ private final class IslandView: NSView {
 
     /// Switch what the open island shows. Content cross-fades within the same
     /// shape; the shape itself does not move.
+    /// How long the wave takes to settle on release before the next mode is
+    /// revealed. This is the "event" of stopping: without it the wave simply
+    /// evaporated and the release felt like nothing happened.
+    private static let releaseSettle: CFTimeInterval = 0.28
+    private var modeGeneration = 0
+
     func setMode(_ m: IslandMode) {
         guard m != mode else { return }
         let wasRecording = mode.isRecording
         mode = m
+        modeGeneration += 1
+        let generation = modeGeneration
         if m.isRecording {
             if !wasRecording { startRecording() }
         } else {
             stopRecording()
         }
-        let chinSize = CGSize(width: pillFrame(.open).width, height: Island.chinHeight(.open))
-        if state == .open {
-            let fade = CATransition()
-            fade.type = .fade
-            fade.duration = 0.22
-            content.add(fade, forKey: "mode")
+
+        let reveal = { [weak self] in
+            guard let self, self.modeGeneration == generation else { return }
+            let chinSize = CGSize(width: self.pillFrame(.open).width, height: Island.chinHeight(.open))
+            if self.state == .open {
+                let fade = CATransition()
+                fade.type = .fade
+                fade.duration = 0.22
+                self.content.add(fade, forKey: "mode")
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.layoutCluster(in: chinSize)
+            CATransaction.commit()
+        }
+
+        // Recording → anything else while open: let the wave settle first.
+        // Bars fall to the midline, timer and glyph fade; then reveal.
+        guard wasRecording, !m.isRecording, state == .open else {
+            reveal()
+            return
         }
         CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layoutCluster(in: chinSize)
+        CATransaction.setAnimationDuration(Self.releaseSettle)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        for bar in bars {
+            bar.transform = CATransform3DMakeScale(1, Wave.minScale, 1)
+            bar.opacity = 0.35
+        }
+        timer.opacity = 0
+        glyphRing.opacity = 0
+        glyphSquare.opacity = 0
+        symbol.opacity = 0
         CATransaction.commit()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.releaseSettle * 0.85, execute: reveal)
     }
 
     /// Mic level, 0...1, at ~24 Hz. Voice-memo style: the new sample enters on
@@ -670,7 +735,9 @@ private final class IslandView: NSView {
     /// the implicit CALayer action smooths each step for free, and the
     /// transforms are all the compositor ever touches.
     func setLevel(_ level: CGFloat) {
-        guard state == .open else { return }
+        // Levels can trail the stop by a few callbacks; once the mode has left
+        // recording they must not fight the wave's settle.
+        guard state == .open, mode.isRecording else { return }
         levelHistory.removeFirst()
         levelHistory.append(max(0, min(level, 1)))
 
