@@ -215,6 +215,8 @@ private final class IslandView: NSView {
     /// "thinking" shimmer — so a wait reads as alive rather than stuck.
     private let shimmer = CAGradientLayer()
     private(set) var mode: IslandMode = .dictate
+    /// User setting: show the small clock once a dictation runs long.
+    var clockEnabled = true
     private var timerTick: Timer?
     private var recordingStart: Date?
     private enum Wave {
@@ -894,7 +896,7 @@ private final class IslandView: NSView {
         CATransaction.setDisableActions(true)
         timer.string = text
         CATransaction.commit()
-        if seconds >= Text.clockAfter, timer.opacity == 0, mode.isRecording {
+        if clockEnabled, seconds >= Text.clockAfter, timer.opacity == 0, mode.isRecording {
             timer.opacity = 1 // implicit fade
         }
     }
@@ -1104,6 +1106,11 @@ private final class IslandController {
         view.setMode(m)
     }
 
+    func setClock(_ enabled: Bool) {
+        guard let (_, view) = ensurePanel() else { return }
+        view.clockEnabled = enabled
+    }
+
     /// Show the outcome for a beat, then close. Opens first if needed, so a
     /// tap-refine that never recorded still gets its "Done".
     func finish(ok: Bool) {
@@ -1175,6 +1182,12 @@ public func notch_overlay_set_mode(_ mode: Int32) {
     default: m = .dictate
     }
     DispatchQueue.main.async { IslandController.shared.setMode(m) }
+}
+
+/// Show or hide the small long-dictation clock (user setting).
+@_cdecl("notch_overlay_set_clock")
+public func notch_overlay_set_clock(_ enabled: Int32) {
+    DispatchQueue.main.async { IslandController.shared.setClock(enabled != 0) }
 }
 
 /// Show ✓ Done (or ✗) briefly, then close.

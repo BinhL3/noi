@@ -6,6 +6,7 @@ import { ShortcutInput } from "../ShortcutInput";
 import { PushToTalk } from "../PushToTalk";
 import { MicrophoneSelector } from "../MicrophoneSelector";
 import { ShowOverlay } from "../ShowOverlay";
+import { OverlayClock } from "../OverlayClock";
 import { AutostartToggle } from "../AutostartToggle";
 import { AudioFeedback } from "../AudioFeedback";
 import { ModelSettingsCard } from "../general/ModelSettingsCard";
@@ -40,6 +41,7 @@ export const SimpleSettings: React.FC<{
         <PushToTalk descriptionMode="tooltip" grouped={true} />
         <MicrophoneSelector descriptionMode="tooltip" grouped={true} />
         <ShowOverlay descriptionMode="tooltip" grouped={true} />
+        <OverlayClock descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />
         <AudioFeedback descriptionMode="tooltip" grouped={true} />
       </SimpleSection>

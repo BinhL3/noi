@@ -197,6 +197,10 @@
       "pushToTalk": {
         "label": "Push To Talk",
         "description": "Hold to record, release to stop"
+      },
+      "overlayClock": {
+        "label": "Timer for long dictations",
+        "description": "After eight seconds of recording, a small clock appears in the notch so you always know it is still listening."
       }
     },
     "models": {

@@ -655,6 +655,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::suspend_all_bindings,
             shortcut::resume_all_bindings,
             shortcut::change_mute_while_recording_setting,
+            shortcut::change_overlay_clock_setting,
             shortcut::change_append_trailing_space_setting,
             shortcut::change_lazy_stream_close_setting,
             shortcut::change_vad_enabled_setting,
@@ -977,6 +978,7 @@ pub fn run(cli_args: CliArgs) {
                 && settings.overlay_position == settings::OverlayPosition::Top
             {
                 native_notch::prepare();
+                native_notch::set_clock(settings.overlay_clock);
             }
 
             // Pre-warm GPU/accelerator enumeration on a background thread. The first

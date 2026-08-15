@@ -19,6 +19,7 @@ unsafe extern "C" {
     fn notch_overlay_hide();
     fn notch_overlay_set_mode(mode: i32);
     fn notch_overlay_finish(ok: i32);
+    fn notch_overlay_set_clock(enabled: i32);
     fn notch_overlay_set_level(level: f32);
 }
 
@@ -81,6 +82,14 @@ pub fn finish(ok: bool) {
         return;
     }
     unsafe { notch_overlay_finish(ok as i32) }
+}
+
+/// Whether the island shows its small clock once a dictation runs long.
+pub fn set_clock(enabled: bool) {
+    if !is_available() {
+        return;
+    }
+    unsafe { notch_overlay_set_clock(enabled as i32) }
 }
 
 /// Microphone level, clamped to 0.0..=1.0.
