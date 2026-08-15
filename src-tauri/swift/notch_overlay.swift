@@ -183,11 +183,26 @@ private final class IslandView: NSView {
     /// Everything in the chin. Fades and scales in from the top edge as one
     /// unit, so content is revealed by the island opening rather than popping.
     private let content = CALayer()
-    /// One layer per waveform bar. Levels arrive per audio callback and drive
-    /// each bar's scaleY about its CENTRE, so a bar grows up and down at
-    /// once — Voice Memos and the iOS island both mirror the wave around a
-    /// midline; a bottom-anchored bar reads as an equaliser, not a voice.
-    private var bars: [CALayer] = []
+    /// The voice: a Siri-style layered wave — three translucent sine
+    /// composites that re-roll toward fresh random shapes as the level
+    /// changes (after alfianlosari/SiriWaveView, via Talkify), drawn in the
+    /// brand blues. It is the logo, live. Each layer is a CAShapeLayer whose
+    /// path is rebuilt on a 30 Hz tick with a fixed point count, so the
+    /// implicit path animation morphs it smoothly between ticks.
+    private var waveLayers: [CAShapeLayer] = []
+    private var waveShapes: [SiriWave] = []
+    private var waveTargets: [SiriWave] = []
+    private var wavePower: CGFloat = 0
+    private var wavePowerTarget: CGFloat = 0
+    private var waveTick: Timer?
+    private var waveRect: CGRect = .zero
+    private var lastReroll: TimeInterval = 0
+    /// Edge glow: a gradient beam along the island's open silhouette
+    /// (flanks and bottom, never the top edge), blurred soft, breathing with
+    /// the voice. Lives outside the pill's mask so it can spill past the edge.
+    private let glowHost = CALayer()
+    private let glowMask = CAShapeLayer()
+    private let glowGradient = CAGradientLayer()
     /// Elapsed time, right of the wave, as Voice Memos pairs them. Digits
     /// are monospaced so the label doesn't jitter as they tick.
     private let timer = CATextLayer()
@@ -212,17 +227,30 @@ private final class IslandView: NSView {
     private var timerTick: Timer?
     private var recordingStart: Date?
     private enum Wave {
-        static let count = 26
-        static let barWidth: CGFloat = 3
-        static let gap: CGFloat = 3
-        static let maxHeight: CGFloat = 26
-        /// Silence is a row of dots, not nothing.
-        static let minScale: CGFloat = 0.12
-        static var totalWidth: CGFloat {
-            CGFloat(count) * barWidth + CGFloat(count - 1) * gap
-        }
-        /// Voice Memos red. White bars read as a generic meter.
+        static let totalWidth: CGFloat = 156
+        static let maxHeight: CGFloat = 30
+        /// Points per wave path; constant so paths morph.
+        static let samples = 48
+        /// How often each layer picks a new random composition.
+        static let rerollInterval: TimeInterval = 0.3
+        /// A whisper of motion at silence, so the wave reads as listening.
+        static let idlePower: CGFloat = 0.06
+        /// Voice Memos red, kept for the record glyph in dictate mode.
         static let tint = NSColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1)
+    }
+    /// The three wave colours per mode: brand blues for dictation, lavender
+    /// for an instruction, so the two still read differently at a glance.
+    private enum WavePalette {
+        static let dictate: [NSColor] = [
+            NSColor(red: 0.44, green: 0.66, blue: 0.86, alpha: 0.85),
+            NSColor(red: 0.62, green: 0.77, blue: 0.91, alpha: 0.75),
+            NSColor(red: 0.90, green: 0.96, blue: 1.00, alpha: 0.65),
+        ]
+        static let instruct: [NSColor] = [
+            NSColor(red: 0.62, green: 0.50, blue: 0.92, alpha: 0.85),
+            NSColor(red: 0.76, green: 0.66, blue: 0.96, alpha: 0.75),
+            NSColor(red: 0.94, green: 0.90, blue: 1.00, alpha: 0.65),
+        ]
     }
     private enum Text {
         static let font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
@@ -252,7 +280,6 @@ private final class IslandView: NSView {
     /// Level history for the voice-memo waveform: newest sample on the right,
     /// scrolling left as speech continues — the shape of what was just said,
     /// not merely the current loudness.
-    private var levelHistory = [CGFloat](repeating: 0, count: Wave.count)
 
     private var cutoutWidth: CGFloat = 186
     private var safeAreaTop: CGFloat = 32
@@ -318,14 +345,46 @@ private final class IslandView: NSView {
         content.opacity = 0
         pill.addSublayer(content)
 
-        for _ in 0..<Wave.count {
-            let bar = CALayer()
-            bar.backgroundColor = Wave.tint.cgColor
-            bar.cornerRadius = Wave.barWidth / 2
-            bar.transform = CATransform3DMakeScale(1, Wave.minScale, 1)
-            content.addSublayer(bar)
-            bars.append(bar)
+        for _ in 0..<3 {
+            let wave = CAShapeLayer()
+            wave.lineWidth = 0
+            // Screen-blend so overlaps go lighter, the way stacked light does.
+            wave.compositingFilter = "screenBlendMode"
+            content.addSublayer(wave)
+            waveLayers.append(wave)
+            waveShapes.append(SiriWave.random(power: 0))
+            waveTargets.append(SiriWave.random(power: 0))
         }
+
+        // Edge glow: a big conic gradient, masked to a soft stroke of the
+        // open outline. Sibling of the pill (above it), unmasked, so the
+        // beam straddles the edge. Rides the pill's bounds/path springs.
+        glowHost.anchorPoint = CGPoint(x: 0.5, y: 1)
+        glowHost.opacity = 0
+        glowMask.anchorPoint = CGPoint(x: 0.5, y: 0)
+        glowMask.fillColor = NSColor.clear.cgColor
+        glowMask.strokeColor = NSColor.black.cgColor
+        glowMask.lineWidth = 5
+        glowMask.lineCap = .round
+        glowHost.mask = glowMask
+        glowGradient.type = .conic
+        glowGradient.startPoint = CGPoint(x: 0.5, y: 0.5)
+        glowGradient.endPoint = CGPoint(x: 1, y: 0.5)
+        glowGradient.colors = WavePalette.dictate.map { $0.withAlphaComponent(1).cgColor } + [WavePalette.dictate[0].withAlphaComponent(1).cgColor]
+        glowGradient.frame = CGRect(x: -500, y: -420, width: 1000, height: 1000)
+        glowHost.addSublayer(glowGradient)
+        if let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.name = "blur"
+            blur.setValue(3, forKey: kCIInputRadiusKey)
+            glowHost.filters = [blur]
+        }
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0
+        spin.toValue = 2 * Double.pi
+        spin.duration = 6
+        spin.repeatCount = .infinity
+        glowGradient.add(spin, forKey: "spin")
+        layer?.addSublayer(glowHost)
 
         glyphRing.fillColor = NSColor.clear.cgColor
         glyphRing.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
@@ -437,6 +496,11 @@ private final class IslandView: NSView {
             }
             clip.path = targetPath
             rim.path = path(for: target.size, s, closed: false)
+            glowHost.position = pillTop
+            glowHost.bounds = targetBounds
+            glowMask.position = .zero
+            glowMask.bounds = targetBounds
+            glowMask.path = rim.path
             shadowLayer.shadowPath = targetPath
             shadowLayer.shadowOpacity = shadowOpacity
             layoutContents(s)
@@ -492,6 +556,12 @@ private final class IslandView: NSView {
         clip.add(pathSpring, forKey: "path")
         rim.path = rimPath
         rim.add(rimSpring, forKey: "path")
+        glowHost.bounds = targetBounds
+        glowHost.add(boundsSpring, forKey: "bounds")
+        glowMask.bounds = targetBounds
+        glowMask.add(boundsSpring, forKey: "bounds")
+        glowMask.path = rimPath
+        glowMask.add(rimSpring, forKey: "path")
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.bounds = targetBounds
         shadowLayer.shadowPath = targetPath
@@ -572,12 +642,9 @@ private final class IslandView: NSView {
             content.opacity = 0
             content.transform = CATransform3DMakeScale(0.7, 0.7, 1)
             content.setValue(Island.contentOutBlur, forKeyPath: "filters.blur.inputRadius")
-            // Bars fall back to the midline as they fade, so the wave dies
-            // rather than being cut off mid-word.
-            for bar in bars {
-                bar.transform = CATransform3DMakeScale(1, Wave.minScale, 1)
-            }
             CATransaction.commit()
+            wavePowerTarget = 0
+            glowHost.opacity = 0
         }
 
         layoutCluster(in: chinSize)
@@ -603,8 +670,12 @@ private final class IslandView: NSView {
         case .working: tint = Tint.instruct
         case .done(let ok): tint = ok ? Tint.ok : Tint.fail
         }
-        for bar in bars { bar.backgroundColor = tint.cgColor }
-        timer.foregroundColor = tint.cgColor
+        let palette = mode == .instruct ? WavePalette.instruct : WavePalette.dictate
+        for (i, wave) in waveLayers.enumerated() { wave.fillColor = palette[i].cgColor }
+        glowGradient.colors = palette.map { $0.withAlphaComponent(1).cgColor } + [palette[0].withAlphaComponent(1).cgColor]
+        // The clock reads in white beside a coloured wave; the record glyph
+        // keeps its red — the one universally understood "recording" cue.
+        timer.foregroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
         glyphSquare.backgroundColor = tint.cgColor
 
         // Which members are present.
@@ -614,7 +685,7 @@ private final class IslandView: NSView {
         symbol.isHidden = usesRing || isCheck
         checkDisc.isHidden = !isCheck
         checkStroke.isHidden = !isCheck
-        for bar in bars { bar.isHidden = !recording; bar.opacity = 1 }
+        for wave in waveLayers { wave.isHidden = !recording; wave.opacity = 1 }
         timer.isHidden = !recording
         timer.opacity = 1
         glyphRing.opacity = 1
@@ -662,14 +733,12 @@ private final class IslandView: NSView {
         x += glyphWidth + gap
 
         if recording {
-            for (i, bar) in bars.enumerated() {
-                // frame-setting resets anchored position, so place via bounds+position.
-                bar.bounds = CGRect(x: 0, y: 0, width: Wave.barWidth, height: Wave.maxHeight)
-                bar.position = CGPoint(
-                    x: x + CGFloat(i) * (Wave.barWidth + Wave.gap) + Wave.barWidth / 2,
-                    y: midY
-                )
-            }
+            waveRect = CGRect(x: x, y: midY - Wave.maxHeight / 2, width: Wave.totalWidth, height: Wave.maxHeight)
+            for wave in waveLayers { wave.frame = waveRect }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            redrawWaves()
+            CATransaction.commit()
             x += Wave.totalWidth + gap
             timer.frame = CGRect(x: x, y: midY - textHeight / 2 - 1, width: Text.width, height: textHeight)
         } else {
@@ -800,35 +869,11 @@ private final class IslandView: NSView {
         CATransaction.begin()
         CATransaction.setAnimationDuration(Self.releaseSettle)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
-        // The wave settles from the centre outward: each bar starts a few
-        // milliseconds after its inner neighbour, so the collapse ripples
-        // rather than dropping in one frame.
-        let mid = CGFloat(bars.count - 1) / 2
-        for (i, bar) in bars.enumerated() {
-            let dist = abs(CGFloat(i) - mid)
-            let delay = Double(dist) * 0.012
-            let target = CATransform3DMakeScale(1, Wave.minScale, 1)
-            let fall = CABasicAnimation(keyPath: "transform")
-            fall.fromValue = bar.presentation()?.transform ?? bar.transform
-            fall.toValue = target
-            fall.duration = Self.releaseSettle - delay
-            fall.beginTime = CACurrentMediaTime() + delay
-            fall.fillMode = .backwards
-            fall.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            let dim = CABasicAnimation(keyPath: "opacity")
-            dim.fromValue = bar.presentation()?.opacity ?? bar.opacity
-            dim.toValue = 0.35
-            dim.duration = fall.duration
-            dim.beginTime = fall.beginTime
-            dim.fillMode = .backwards
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            bar.transform = target
-            bar.opacity = 0.35
-            bar.add(fall, forKey: "settle")
-            bar.add(dim, forKey: "settleDim")
-            CATransaction.commit()
-        }
+        // The wave drains to a still line while the glow dies; the tick keeps
+        // running through the settle so the drain is drawn, not cut.
+        wavePowerTarget = 0
+        glowHost.opacity = 0
+        for wave in waveLayers { wave.opacity = 0.35 }
         timer.opacity = 0
         glyphRing.opacity = 0
         glyphSquare.opacity = 0
@@ -837,28 +882,59 @@ private final class IslandView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.releaseSettle * 0.85, execute: reveal)
     }
 
-    /// Mic level, 0...1, at ~24 Hz. Voice-memo style: the new sample enters on
-    /// the right and history scrolls left, so the waveform is a picture of the
-    /// last second of speech. Each bar is a centre-anchored scaleY transform;
-    /// the implicit CALayer action smooths each step for free, and the
-    /// transforms are all the compositor ever touches.
+    /// Mic level, 0...1, at ~24 Hz. Sets the wave's power target and the
+    /// glow's breath; the 30 Hz tick eases toward them.
     func setLevel(_ level: CGFloat) {
         // Levels can trail the stop by a few callbacks; once the mode has left
         // recording they must not fight the wave's settle.
         guard state == .open, mode.isRecording else { return }
-        levelHistory.removeFirst()
-        levelHistory.append(max(0, min(level, 1)))
+        let l = max(0, min(level, 1))
+        wavePowerTarget = Wave.idlePower + (1 - Wave.idlePower) * l
+        // Glow breathes: floor so it is always faintly there while recording.
+        glowHost.opacity = Float(0.25 + 0.75 * l)
+    }
 
-        for (i, bar) in bars.enumerated() {
-            let scale = max(Wave.minScale, levelHistory[i])
-            bar.transform = CATransform3DMakeScale(1, scale, 1)
+    /// One frame of wave motion: ease power and each layer's composition
+    /// toward their targets, re-roll targets on the interval, redraw.
+    private func tickWaves() {
+        let now = CACurrentMediaTime()
+        wavePower += (wavePowerTarget - wavePower) * 0.25
+        if now - lastReroll > Wave.rerollInterval {
+            lastReroll = now
+            for i in waveTargets.indices { waveTargets[i] = SiriWave.random(power: 1) }
+        }
+        for i in waveShapes.indices { waveShapes[i].ease(toward: waveTargets[i], by: 0.18) }
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(1.0 / 30.0)
+        redrawWaves()
+        CATransaction.commit()
+        // Stop ticking once drained and idle.
+        if !mode.isRecording, wavePower < 0.005 {
+            waveTick?.invalidate(); waveTick = nil
         }
     }
 
-    /// A fresh recording starts with a flat line and 0:00, not the tail of
+    private func redrawWaves() {
+        guard waveRect.width > 0 else { return }
+        let size = waveRect.size
+        for (i, wave) in waveLayers.enumerated() {
+            wave.path = waveShapes[i].path(in: size, power: wavePower, phaseShift: Double(i) * 0.9)
+        }
+    }
+
+    private func startWaveTick() {
+        waveTick?.invalidate()
+        waveTick = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.tickWaves()
+        }
+    }
+
+    /// A fresh recording starts with a still wave and 0:00, not the tail of
     /// the last one.
     func startRecording() {
-        levelHistory = [CGFloat](repeating: 0, count: Wave.count)
+        wavePower = 0
+        wavePowerTarget = Wave.idlePower
+        startWaveTick()
         recordingStart = Date()
         updateTimer()
         timerTick?.invalidate()
@@ -871,6 +947,9 @@ private final class IslandView: NSView {
         timerTick?.invalidate()
         timerTick = nil
         recordingStart = nil
+        wavePowerTarget = 0
+        // Keep ticking so the drain is drawn; tickWaves stops itself once still.
+        if waveTick == nil { startWaveTick() }
     }
 
     private func updateTimer() {
@@ -882,6 +961,54 @@ private final class IslandView: NSView {
         CATransaction.setDisableActions(true)
         timer.string = text
         CATransaction.commit()
+    }
+}
+
+// MARK: - Siri wave
+
+/// One sine component: amplitude, frequency, phase.
+private struct SiriCurve {
+    var a: Double, k: Double, t: Double
+    static func random() -> SiriCurve {
+        SiriCurve(a: .random(in: 0.2...1.0), k: .random(in: 0.6...0.9), t: .random(in: -1.0...4.0))
+    }
+    mutating func ease(toward o: SiriCurve, by f: Double) {
+        a += (o.a - a) * f; k += (o.k - k) * f; t += (o.t - t) * f
+    }
+}
+
+/// A composition of four curves. `path` renders it as a closed shape mirrored
+/// about the midline, attenuated toward the ends so it tapers like the mark.
+private struct SiriWave {
+    var curves: [SiriCurve]
+    static func random(power: Double) -> SiriWave {
+        SiriWave(curves: (0..<4).map { _ in SiriCurve.random() })
+    }
+    mutating func ease(toward o: SiriWave, by f: Double) {
+        for i in curves.indices { curves[i].ease(toward: o.curves[i], by: f) }
+    }
+    func path(in size: CGSize, power: CGFloat, phaseShift: Double) -> CGPath {
+        let n = 48
+        let w = Double(size.width), h = Double(size.height)
+        let midY = h / 2
+        let amp = Double(power) * midY * 0.95
+        var top: [CGPoint] = []
+        top.reserveCapacity(n + 1)
+        for i in 0...n {
+            let u = Double(i) / Double(n)          // 0...1
+            let x = (u * 2 - 1) * 2                // -2...2 like the original
+            let att = pow(4 / (4 + pow(x, 4)), 4)  // bell envelope
+            var y = 0.0
+            for c in curves { y += c.a * sin(c.k * x * .pi + c.t + phaseShift) }
+            y = y / Double(curves.count) * att * amp
+            top.append(CGPoint(x: u * w, y: midY + y))
+        }
+        let p = CGMutablePath()
+        p.move(to: top[0])
+        for pt in top.dropFirst() { p.addLine(to: pt) }
+        for pt in top.reversed() { p.addLine(to: CGPoint(x: pt.x, y: 2 * midY - pt.y)) }
+        p.closeSubpath()
+        return p
     }
 }
 
