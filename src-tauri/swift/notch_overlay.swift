@@ -348,8 +348,15 @@ private final class IslandView: NSView {
         innerPosition.fromValue = NSValue(point: clip.position)
         innerPosition.toValue = NSValue(point: CGPoint(x: target.width / 2, y: target.height / 2))
 
+        // Content keeps its open geometry always (see layoutContents); only its
+        // horizontal centre follows the pill, on the pill's spring, so it never
+        // drifts relative to the shape while fading.
+        let contentPosition = springAnimation(keyPath: "position", duration: duration, bounce: bounce)
+        contentPosition.fromValue = NSValue(point: content.position)
+        contentPosition.toValue = NSValue(point: CGPoint(x: target.width / 2, y: Island.chinHeight(.open)))
+
         let contentLead: CFTimeInterval = leavingOpen ? Island.contentOutLead : 0
-        for anim in [size, position, pathSpring, shadowSpring, innerPosition] {
+        for anim in [size, position, pathSpring, shadowSpring, innerPosition, contentPosition] {
             anim.beginTime = CACurrentMediaTime() + contentLead
             anim.fillMode = .backwards
         }
@@ -368,6 +375,7 @@ private final class IslandView: NSView {
             shape.add(innerPosition, forKey: "position")
             shape.add(pathSpring, forKey: "path")
         }
+        content.add(contentPosition, forKey: "position")
         // The shadow is a sibling layer (the pill would clip its own shadow).
         shadowLayer.frame = target
         shadowLayer.shadowPath = targetPath
@@ -384,7 +392,6 @@ private final class IslandView: NSView {
     /// housing occupies the top `safeAreaTop` points.
     private func layoutContents(in pillRect: CGRect, _ s: IslandState) {
         let open = s == .open
-        let chinHeight = pillRect.height - safeAreaTop
 
         rim.opacity = s == .closed ? 0 : 1
 
@@ -392,9 +399,15 @@ private final class IslandView: NSView {
         // closed the chin has no height, so we keep the open size and let
         // opacity + scale do the hiding — a zero-size layer would make the
         // reveal a snap instead of a morph.
-        let chinSize = CGSize(width: pillRect.width, height: max(chinHeight, Island.chinHeight(.open)))
+        // Always the OPEN chin's geometry, whatever state we are entering:
+        // content is only ever visible when open, and re-laying it out for a
+        // smaller pill made the wave slide down-left as it faded. Its top edge
+        // sits at the open chin height in pill coordinates; when the pill is
+        // shorter than that the content is above the pill and the mask hides
+        // it. Only the horizontal centre tracks the pill.
+        let chinSize = CGSize(width: pillFrame(.open).width, height: Island.chinHeight(.open))
         content.bounds = CGRect(origin: .zero, size: chinSize)
-        content.position = CGPoint(x: pillRect.width / 2, y: chinHeight)
+        content.position = CGPoint(x: pillRect.width / 2, y: Island.chinHeight(.open))
 
         // Content in: rides the container's spring. Content out: quick and
         // eased, ahead of the container (see layoutPill).
