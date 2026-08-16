@@ -180,6 +180,7 @@ pub fn maybe_capture_note(app: &AppHandle, text: &str) -> Option<Note> {
         Ok(note) => {
             let _ = crate::clipboard::write_text_to_clipboard(app, &body);
             let _ = app.emit("note-added", &note);
+            push_latest(app);
             Some(note)
         }
         Err(e) => {
@@ -203,4 +204,46 @@ pub fn acknowledge(app: &AppHandle) {
         }
     }
     crate::utils::hide_recording_overlay(app);
+}
+
+/// Tell the island what its long-hover preview should show. Call after any
+/// change to the notes and once at startup.
+pub fn push_latest(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(store) = app.try_state::<Arc<NoteStore>>() else {
+            return;
+        };
+        let latest = store.list(1).ok().and_then(|v| v.into_iter().next());
+        match latest {
+            Some(n) => {
+                let first_line = n.body.lines().next().unwrap_or("").to_string();
+                crate::native_notch::set_latest_note(Some((
+                    &first_line,
+                    &relative_time(n.created_at),
+                )));
+            }
+            None => crate::native_notch::set_latest_note(None),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+/// "just now", "5m ago", "2h ago", "yesterday", "Aug 3".
+pub fn relative_time(unix: i64) -> String {
+    let now = chrono::Utc::now().timestamp();
+    let d = (now - unix).max(0);
+    if d < 60 {
+        "Noted just now".into()
+    } else if d < 3600 {
+        format!("Noted {}m ago", d / 60)
+    } else if d < 86_400 {
+        format!("Noted {}h ago", d / 3600)
+    } else if d < 172_800 {
+        "Noted yesterday".into()
+    } else {
+        let dt = chrono::DateTime::from_timestamp(unix, 0).unwrap_or_default();
+        format!("Noted {}", dt.format("%b %-d"))
+    }
 }

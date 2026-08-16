@@ -988,6 +988,7 @@ pub fn run(cli_args: CliArgs) {
             {
                 native_notch::prepare();
                 native_notch::set_clock(settings.overlay_clock);
+                notes::push_latest(app.handle());
             }
 
             // Pre-warm GPU/accelerator enumeration on a background thread. The first

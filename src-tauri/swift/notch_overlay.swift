@@ -30,6 +30,8 @@ enum IslandMode: Equatable {
     /// Outcome shown for a beat before closing. `label` is what it says
     /// ("Done", "Noted", "Couldn't do that").
     case done(ok: Bool, label: String)
+    /// Long-hover at rest: the latest note, with when it was taken.
+    case note(String, when: String)
 
     var isDone: Bool { if case .done = self { return true }; return false }
     var isSuccess: Bool { if case .done(let ok, _) = self { return ok }; return false }
@@ -88,6 +90,8 @@ private enum Island {
     /// far outside the pill still counts as "on it" (larger once lifted so a
     /// pointer drifting along the edge doesn't flicker it).
     static let hoverDwell: TimeInterval = 0.3
+    /// Keep hovering this long and the island opens on the latest note.
+    static let hoverOpenDwell: TimeInterval = 0.9
     static let hoverExitGrace: TimeInterval = 0.1
     static func hoverSlop(_ s: IslandState) -> CGFloat {
         switch s { case .closed: 10; case .peek, .open: 30 }
@@ -592,6 +596,7 @@ private final class IslandView: NSView {
         case .armed: tint = Tint.instruct
         case .working: tint = Tint.instruct
         case .done(let ok, _): tint = ok ? Tint.ok : Tint.fail
+        case .note: tint = WavePalette.dictate[1]
         }
         let palette = mode == .instruct ? WavePalette.instruct : WavePalette.dictate
         for (i, wave) in waveLayers.enumerated() { wave.fillColor = palette[i].cgColor }
@@ -623,6 +628,7 @@ private final class IslandView: NSView {
         case .armed: symbolName = "sparkles"; text = "Refine"; sub = "double-tap to describe a change instead"
         case .working(let s, let sym): symbolName = sym; text = s
         case .done(let ok, let label): symbolName = ok ? "" : "xmark.circle.fill"; text = label
+        case .note(let body, let when): symbolName = "note.text"; text = body; sub = when
         }
         if !symbolName.isEmpty {
             symbol.contents = symbolImage(symbolName, size: Glyph.symbolSize, color: tint)
@@ -644,7 +650,9 @@ private final class IslandView: NSView {
         let titleFont = twoLine ? Text.titleFont : Text.font
         let titleWidth = text.isEmpty ? 0 : ceil((text as NSString).size(withAttributes: [.font: titleFont]).width) + 2
         let subWidth = sub.isEmpty ? 0 : ceil((sub as NSString).size(withAttributes: [.font: Text.subFont]).width) + 2
-        let labelWidth = max(titleWidth, subWidth)
+        // Never wider than the chin allows; CATextLayer truncates with an ellipsis.
+        let maxLabel = chinSize.width - 2 * (Island.flare(.open) + 12) - Glyph.symbolSize - gap
+        let labelWidth = min(max(titleWidth, subWidth), maxLabel)
         let instruct = mode == .instruct
         let waveWidth = instruct ? Wave.instructWidth : Wave.totalWidth
         let clusterWidth = instruct ? waveWidth + gap + labelWidth
@@ -1062,6 +1070,11 @@ private final class IslandController {
     private var hovering = false
     private var pendingPeek: DispatchWorkItem?
     private var pendingUnpeek: DispatchWorkItem?
+    private var pendingHoverOpen: DispatchWorkItem?
+    /// Latest note (body, when), pushed by Rust; nil when there are none.
+    private var latestNote: (String, String)?
+    /// The island is open because of a hover, not a recording.
+    private var hoverOpened = false
     private var mouseMonitors: [Any] = []
 
     private func ensurePanel() -> (NSPanel, IslandView)? {
@@ -1151,16 +1164,32 @@ private final class IslandController {
             }
             pendingPeek = peek
             DispatchQueue.main.asyncAfter(deadline: .now() + Island.hoverDwell, execute: peek)
+            // Keep hovering: open on the latest note, if there is one.
+            let openNote = DispatchWorkItem { [weak self] in
+                guard let self, self.hovering, !self.recording, let view = self.view,
+                      let (body, when) = self.latestNote else { return }
+                self.hoverOpened = true
+                view.setMode(.note(body, when: when))
+                view.layoutPill(.open, animated: true)
+            }
+            pendingHoverOpen = openNote
+            DispatchQueue.main.asyncAfter(deadline: .now() + Island.hoverOpenDwell, execute: openNote)
         } else {
             pendingPeek?.cancel()
-            guard view.state == .peek else { return }
+            pendingHoverOpen?.cancel()
+            guard view.state == .peek || hoverOpened else { return }
             let unpeek = DispatchWorkItem { [weak self] in
                 guard let self, !self.hovering, !self.recording else { return }
+                self.hoverOpened = false
                 self.view?.layoutPill(.closed, animated: true)
             }
             pendingUnpeek = unpeek
             DispatchQueue.main.asyncAfter(deadline: .now() + Island.hoverExitGrace, execute: unpeek)
         }
+    }
+
+    func setLatestNote(body: String?, when: String?) {
+        if let body, let when { latestNote = (body, when) } else { latestNote = nil }
     }
 
     /// True only on displays with a camera housing; callers fall back to the
@@ -1180,6 +1209,8 @@ private final class IslandController {
         guard let (_, view) = ensurePanel() else { return }
         pendingPeek?.cancel()
         pendingUnpeek?.cancel()
+        pendingHoverOpen?.cancel()
+        hoverOpened = false
         guard !recording else { return }
         recording = true
         if view.mode.isRecording { view.startRecording() }
@@ -1277,6 +1308,14 @@ public func notch_overlay_set_mode(_ mode: Int32) {
 @_cdecl("notch_overlay_set_clock")
 public func notch_overlay_set_clock(_ enabled: Int32) {
     DispatchQueue.main.async { IslandController.shared.setClock(enabled != 0) }
+}
+
+/// Latest note for the long-hover preview; NULL body clears it.
+@_cdecl("notch_overlay_set_latest_note")
+public func notch_overlay_set_latest_note(_ body: UnsafePointer<CChar>?, _ when: UnsafePointer<CChar>?) {
+    let b = body.map { String(cString: $0) }
+    let w = when.map { String(cString: $0) }
+    DispatchQueue.main.async { IslandController.shared.setLatestNote(body: b, when: w) }
 }
 
 /// Show an outcome briefly, then close. 0 = failed, 1 = done, 2 = noted.

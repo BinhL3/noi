@@ -20,6 +20,10 @@ unsafe extern "C" {
     fn notch_overlay_set_mode(mode: i32);
     fn notch_overlay_finish(outcome: i32);
     fn notch_overlay_set_clock(enabled: i32);
+    fn notch_overlay_set_latest_note(
+        body: *const std::os::raw::c_char,
+        when: *const std::os::raw::c_char,
+    );
     fn notch_overlay_set_level(level: f32);
 }
 
@@ -105,6 +109,21 @@ pub fn set_clock(enabled: bool) {
         return;
     }
     unsafe { notch_overlay_set_clock(enabled as i32) }
+}
+
+/// The latest note, for the island's long-hover preview. `None` clears it.
+pub fn set_latest_note(note: Option<(&str, &str)>) {
+    if !is_available() {
+        return;
+    }
+    match note {
+        Some((body, when)) => {
+            let b = std::ffi::CString::new(body).unwrap_or_default();
+            let w = std::ffi::CString::new(when).unwrap_or_default();
+            unsafe { notch_overlay_set_latest_note(b.as_ptr(), w.as_ptr()) }
+        }
+        None => unsafe { notch_overlay_set_latest_note(std::ptr::null(), std::ptr::null()) },
+    }
 }
 
 /// Microphone level, clamped to 0.0..=1.0.

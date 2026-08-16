@@ -1,6 +1,6 @@
 use crate::notes::{Note, NoteStore};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 #[specta::specta]
@@ -15,12 +15,24 @@ pub fn list_notes(
 
 #[tauri::command]
 #[specta::specta]
-pub fn delete_note(store: State<'_, Arc<NoteStore>>, id: i64) -> Result<(), String> {
-    store.delete(id).map_err(|e| e.to_string())
+pub fn delete_note(
+    app: AppHandle,
+    store: State<'_, Arc<NoteStore>>,
+    id: i64,
+) -> Result<(), String> {
+    store.delete(id).map_err(|e| e.to_string())?;
+    crate::notes::push_latest(&app);
+    Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn restore_note(store: State<'_, Arc<NoteStore>>, id: i64) -> Result<(), String> {
-    store.restore(id).map_err(|e| e.to_string())
+pub fn restore_note(
+    app: AppHandle,
+    store: State<'_, Arc<NoteStore>>,
+    id: i64,
+) -> Result<(), String> {
+    store.restore(id).map_err(|e| e.to_string())?;
+    crate::notes::push_latest(&app);
+    Ok(())
 }
