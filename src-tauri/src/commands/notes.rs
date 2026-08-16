@@ -36,3 +36,28 @@ pub fn restore_note(
     crate::notes::push_latest(&app);
     Ok(())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_note_done(
+    app: AppHandle,
+    store: State<'_, Arc<NoteStore>>,
+    id: i64,
+    done: bool,
+) -> Result<(), String> {
+    store.set_done(id, done).map_err(|e| e.to_string())?;
+    crate::notes::push_latest(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn archive_note(
+    app: AppHandle,
+    store: State<'_, Arc<NoteStore>>,
+    id: i64,
+) -> Result<(), String> {
+    store.archive(id).map_err(|e| e.to_string())?;
+    crate::notes::push_latest(&app);
+    Ok(())
+}

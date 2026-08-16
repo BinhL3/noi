@@ -42,6 +42,14 @@ export const NotesSection: React.FC = () => {
     setUndo(null);
     refresh();
   };
+  const toggleDone = async (n: Note) => {
+    await commands.setNoteDone(n.id, n.done_at === null);
+    refresh();
+  };
+  const archive = async (n: Note) => {
+    await commands.archiveNote(n.id);
+    refresh();
+  };
   const copy = async (n: Note) => {
     await navigator.clipboard.writeText(n.body);
     setCopiedId(n.id);
@@ -87,9 +95,25 @@ export const NotesSection: React.FC = () => {
           {notes.map((n) => (
             <li
               key={n.id}
-              className="group px-4 py-2 flex items-baseline gap-3 border-t border-text/10"
+              className="group px-4 py-2 flex items-center gap-3 border-t border-text/10"
             >
-              <span className="flex-1 text-sm whitespace-pre-wrap select-text">
+              <button
+                type="button"
+                aria-label={
+                  n.done_at ? t("notes.markUndone") : t("notes.markDone")
+                }
+                className={`shrink-0 w-4 h-4 rounded-full border cursor-pointer transition-colors ${
+                  n.done_at
+                    ? "bg-logo-primary border-logo-primary"
+                    : "border-text/30 hover:border-logo-primary"
+                }`}
+                onClick={() => toggleDone(n)}
+              />
+              <span
+                className={`flex-1 text-sm whitespace-pre-wrap select-text ${
+                  n.done_at ? "line-through text-mid-gray" : ""
+                }`}
+              >
                 {n.body}
               </span>
               <span className="text-xs text-mid-gray tabular-nums shrink-0">
@@ -102,6 +126,13 @@ export const NotesSection: React.FC = () => {
                   onClick={() => copy(n)}
                 >
                   {copiedId === n.id ? t("notes.copied") : t("notes.copy")}
+                </button>
+                <button
+                  type="button"
+                  className="text-xs text-mid-gray hover:text-text cursor-pointer"
+                  onClick={() => archive(n)}
+                >
+                  {t("notes.archive")}
                 </button>
                 <button
                   type="button"

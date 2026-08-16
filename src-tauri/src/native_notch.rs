@@ -20,10 +20,8 @@ unsafe extern "C" {
     fn notch_overlay_set_mode(mode: i32);
     fn notch_overlay_finish(outcome: i32);
     fn notch_overlay_set_clock(enabled: i32);
-    fn notch_overlay_set_latest_note(
-        body: *const std::os::raw::c_char,
-        when: *const std::os::raw::c_char,
-    );
+    fn notch_overlay_set_notes(json: *const std::os::raw::c_char);
+    fn notch_overlay_set_note_callback(cb: Option<extern "C" fn(i32, i64)>);
     fn notch_overlay_set_level(level: f32);
 }
 
@@ -111,19 +109,22 @@ pub fn set_clock(enabled: bool) {
     unsafe { notch_overlay_set_clock(enabled as i32) }
 }
 
-/// The latest note, for the island's long-hover preview. `None` clears it.
-pub fn set_latest_note(note: Option<(&str, &str)>) {
+/// The notes list for the island's expanded view, as JSON.
+pub fn set_notes(json: &str) {
     if !is_available() {
         return;
     }
-    match note {
-        Some((body, when)) => {
-            let b = std::ffi::CString::new(body).unwrap_or_default();
-            let w = std::ffi::CString::new(when).unwrap_or_default();
-            unsafe { notch_overlay_set_latest_note(b.as_ptr(), w.as_ptr()) }
-        }
-        None => unsafe { notch_overlay_set_latest_note(std::ptr::null(), std::ptr::null()) },
+    let j = std::ffi::CString::new(json).unwrap_or_default();
+    unsafe { notch_overlay_set_notes(j.as_ptr()) }
+}
+
+/// Register the handler for actions taken in the island's list
+/// (1 = toggle done, 2 = archive).
+pub fn set_note_callback(cb: extern "C" fn(i32, i64)) {
+    if !is_available() {
+        return;
     }
+    unsafe { notch_overlay_set_note_callback(Some(cb)) }
 }
 
 /// Microphone level, clamped to 0.0..=1.0.

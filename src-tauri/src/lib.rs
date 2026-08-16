@@ -728,6 +728,8 @@ pub fn run(cli_args: CliArgs) {
             commands::notes::list_notes,
             commands::notes::delete_note,
             commands::notes::restore_note,
+            commands::notes::set_note_done,
+            commands::notes::archive_note,
             commands::history::get_history_entries,
             commands::history::toggle_history_entry_saved,
             commands::history::get_audio_file_path,
@@ -988,6 +990,7 @@ pub fn run(cli_args: CliArgs) {
             {
                 native_notch::prepare();
                 native_notch::set_clock(settings.overlay_clock);
+                notes::connect_island(app.handle());
                 notes::push_latest(app.handle());
             }
 

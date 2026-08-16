@@ -5,6 +5,7 @@
 import AppKit
 import QuartzCore
 import CoreImage
+import SwiftUI
 
 // MARK: - Geometry
 
@@ -13,6 +14,8 @@ import CoreImage
 /// here" without opening — and `open` is recording, with the chin content.
 enum IslandState {
     case closed, peek, open
+    /// Clicked: the full notes list, tall and wide.
+    case expanded
 }
 
 /// What the open island is showing. Same shape; content and tint differ.
@@ -30,8 +33,8 @@ enum IslandMode: Equatable {
     /// Outcome shown for a beat before closing. `label` is what it says
     /// ("Done", "Noted", "Couldn't do that").
     case done(ok: Bool, label: String)
-    /// Long-hover at rest: the latest note, with when it was taken.
-    case note(String, when: String)
+    /// The notes list is showing (expanded state); the chin cluster is empty.
+    case notes
 
     var isDone: Bool { if case .done = self { return true }; return false }
     var isSuccess: Bool { if case .done(let ok, _) = self { return ok }; return false }
@@ -44,26 +47,26 @@ private enum Island {
     /// Chin below the housing, per state. Closed is exactly the housing so
     /// the pill is invisible at rest.
     static func chinHeight(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 0; case .peek: 8; case .open: 62 }
+        switch s { case .closed: 0; case .peek: 8; case .open: 62; case .expanded: 300 }
     }
     /// Extension past the cutout per side. Closed keeps 2pt of slop so the
     /// bezel seam never shows a light gap.
     static func overhang(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 2; case .peek: 10; case .open: 58 }
+        switch s { case .closed: 2; case .peek: 10; case .open: 58; case .expanded: 120 }
     }
     /// Concave fillet where the island meets the screen edge — what makes it
     /// an island rather than a pill. Both radii scale with the state.
     static func flare(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 6; case .peek: 10; case .open: 22 }
+        switch s { case .closed: 6; case .peek: 10; case .open: 22; case .expanded: 24 }
     }
     /// Bottom corner radius. Open = flare + 5, the ratio the reference apps use.
     static func cornerRadius(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 14; case .peek: 17; case .open: 28 }
+        switch s { case .closed: 14; case .peek: 17; case .open: 28; case .expanded: 32 }
     }
     /// Shadow only once lifted: at rest the island must read as hardware, and
     /// hardware does not cast a shadow onto the wallpaper.
     static func shadowOpacity(_ s: IslandState) -> Float {
-        switch s { case .closed: 0; case .peek: 0.4; case .open: 0.7 }
+        switch s { case .closed: 0; case .peek: 0.4; case .open: 0.7; case .expanded: 0.8 }
     }
 
     /// Springs as Apple specifies them (WWDC23 "Animate with springs"):
@@ -90,11 +93,9 @@ private enum Island {
     /// far outside the pill still counts as "on it" (larger once lifted so a
     /// pointer drifting along the edge doesn't flicker it).
     static let hoverDwell: TimeInterval = 0.3
-    /// Keep hovering this long and the island opens on the latest note.
-    static let hoverOpenDwell: TimeInterval = 0.9
     static let hoverExitGrace: TimeInterval = 0.1
     static func hoverSlop(_ s: IslandState) -> CGFloat {
-        switch s { case .closed: 10; case .peek, .open: 30 }
+        switch s { case .closed: 10; case .peek, .open, .expanded: 30 }
     }
 }
 
@@ -204,6 +205,21 @@ private final class IslandView: NSView {
     /// "thinking" shimmer — so a wait reads as alive rather than stuck.
     private let shimmer = CAGradientLayer()
     private(set) var mode: IslandMode = .dictate
+    /// The notes list (SwiftUI) shown in the expanded state. An NSView, so it
+    /// sits above the layers; faded in once the shape has grown.
+    let notesModel = NotesModel()
+    private var notesHostView: NSView?
+    /// Created on first use; nil before macOS 14 (no notch Mac runs that).
+    private var notesHost: NSView? {
+        if let notesHostView { return notesHostView }
+        guard #available(macOS 14.0, *) else { return nil }
+        let h = NSHostingView(rootView: NotesListView(model: notesModel))
+        h.alphaValue = 0
+        h.isHidden = true
+        addSubview(h)
+        notesHostView = h
+        return h
+    }
     /// User setting: show the small clock once a dictation runs long.
     var clockEnabled = true
     private var timerTick: Timer?
@@ -423,7 +439,48 @@ private final class IslandView: NSView {
     /// Where the top-centre of the pill sits in the view. Constant.
     private var pillTop: CGPoint { CGPoint(x: bounds.width / 2, y: bounds.height) }
 
+    /// The chin rect of a state, in view coordinates (y-up).
+    private func chinRect(_ s: IslandState) -> CGRect {
+        let f = pillFrame(s)
+        let inset = Island.flare(s) + 10
+        return CGRect(
+            x: f.minX + inset,
+            y: f.minY + 8,
+            width: f.width - inset * 2,
+            height: Island.chinHeight(s) - 12
+        )
+    }
+
+    private func layoutNotesHost(for s: IslandState, animated: Bool) {
+        guard let host = notesHost else { return }
+        if s == .expanded {
+            host.frame = chinRect(.expanded)
+            host.isHidden = false
+            if animated {
+                // After the shape has mostly grown.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                    NSAnimationContext.runAnimationGroup { ctx in
+                        ctx.duration = 0.25
+                        ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                        host.animator().alphaValue = 1
+                    }
+                }
+            } else {
+                host.alphaValue = 1
+            }
+        } else if !host.isHidden {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.15
+                host.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                guard let self, self.state != .expanded else { return }
+                host.isHidden = true
+            })
+        }
+    }
+
     func layoutPill(_ s: IslandState, animated: Bool) {
+        layoutNotesHost(for: s, animated: animated)
         let growing = Island.chinHeight(s) > Island.chinHeight(state)
         let leavingOpen = state == .open && s != .open
         state = s
@@ -596,7 +653,7 @@ private final class IslandView: NSView {
         case .armed: tint = Tint.instruct
         case .working: tint = Tint.instruct
         case .done(let ok, _): tint = ok ? Tint.ok : Tint.fail
-        case .note: tint = WavePalette.dictate[1]
+        case .notes: tint = WavePalette.dictate[1]
         }
         let palette = mode == .instruct ? WavePalette.instruct : WavePalette.dictate
         for (i, wave) in waveLayers.enumerated() { wave.fillColor = palette[i].cgColor }
@@ -628,7 +685,7 @@ private final class IslandView: NSView {
         case .armed: symbolName = "sparkles"; text = "Refine"; sub = "double-tap to describe a change instead"
         case .working(let s, let sym): symbolName = sym; text = s
         case .done(let ok, let label): symbolName = ok ? "" : "xmark.circle.fill"; text = label
-        case .note(let body, let when): symbolName = "note.text"; text = body; sub = when
+        case .notes: symbolName = ""
         }
         if !symbolName.isEmpty {
             symbol.contents = symbolImage(symbolName, size: Glyph.symbolSize, color: tint)
@@ -1070,11 +1127,9 @@ private final class IslandController {
     private var hovering = false
     private var pendingPeek: DispatchWorkItem?
     private var pendingUnpeek: DispatchWorkItem?
-    private var pendingHoverOpen: DispatchWorkItem?
-    /// Latest note (body, when), pushed by Rust; nil when there are none.
-    private var latestNote: (String, String)?
-    /// The island is open because of a hover, not a recording.
-    private var hoverOpened = false
+    /// The island is expanded on the notes list (clicked).
+    private var expanded = false
+    private var pendingCollapse: DispatchWorkItem?
     private var mouseMonitors: [Any] = []
 
     private func ensurePanel() -> (NSPanel, IslandView)? {
@@ -1092,8 +1147,8 @@ private final class IslandController {
         // Wide and tall enough for the fully open island; the panel itself never
         // resizes, so nothing but the layer moves during an animation.
         let size = NSSize(
-            width: cutoutWidth + (Island.overhang(.open) + Island.flare(.open)) * 2 + 40,
-            height: safeAreaTop + Island.chinHeight(.open) + 20
+            width: cutoutWidth + (Island.overhang(.expanded) + Island.flare(.expanded)) * 2 + 40,
+            height: safeAreaTop + Island.chinHeight(.expanded) + 20
         )
         let origin = NSPoint(
             x: screen.frame.midX - size.width / 2,
@@ -1148,6 +1203,32 @@ private final class IslandController {
         if let local = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { e in handler(e); return e }) {
             mouseMonitors.append(local)
         }
+        // A click on the island expands it to the notes list; a click
+        // anywhere else while expanded collapses it. Global monitors see
+        // clicks in other apps, which is exactly the case at rest.
+        let click: (NSEvent) -> Void = { [weak self, weak panel, weak view] _ in
+            guard let self, let panel, let view else { return }
+            let inWindow = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+            let inView = view.convert(inWindow, from: nil)
+            let onIsland = view.hoverRect.contains(inView)
+            if self.expanded {
+                if !onIsland { self.collapse() }
+            } else if onIsland, !self.recording {
+                self.expand()
+            }
+        }
+        if let g = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: click) {
+            mouseMonitors.append(g)
+        }
+        if let l = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: { e in click(e); return e }) {
+            mouseMonitors.append(l)
+        }
+        if let k = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] e in
+            if e.keyCode == 53, self?.expanded == true { self?.collapse(); return nil }
+            return e
+        }) {
+            mouseMonitors.append(k)
+        }
     }
 
     private func setHovering(_ now: Bool) {
@@ -1164,23 +1245,11 @@ private final class IslandController {
             }
             pendingPeek = peek
             DispatchQueue.main.asyncAfter(deadline: .now() + Island.hoverDwell, execute: peek)
-            // Keep hovering: open on the latest note, if there is one.
-            let openNote = DispatchWorkItem { [weak self] in
-                guard let self, self.hovering, !self.recording, let view = self.view,
-                      let (body, when) = self.latestNote else { return }
-                self.hoverOpened = true
-                view.setMode(.note(body, when: when))
-                view.layoutPill(.open, animated: true)
-            }
-            pendingHoverOpen = openNote
-            DispatchQueue.main.asyncAfter(deadline: .now() + Island.hoverOpenDwell, execute: openNote)
         } else {
             pendingPeek?.cancel()
-            pendingHoverOpen?.cancel()
-            guard view.state == .peek || hoverOpened else { return }
+            guard view.state == .peek else { return }
             let unpeek = DispatchWorkItem { [weak self] in
-                guard let self, !self.hovering, !self.recording else { return }
-                self.hoverOpened = false
+                guard let self, !self.hovering, !self.recording, !self.expanded else { return }
                 self.view?.layoutPill(.closed, animated: true)
             }
             pendingUnpeek = unpeek
@@ -1188,8 +1257,34 @@ private final class IslandController {
         }
     }
 
-    func setLatestNote(body: String?, when: String?) {
-        if let body, let when { latestNote = (body, when) } else { latestNote = nil }
+    // MARK: Notes list
+
+    func expand() {
+        guard let panel, let view, !expanded else { return }
+        expanded = true
+        pendingPeek?.cancel()
+        pendingUnpeek?.cancel()
+        // The panel takes the mouse only while expanded, so it never steals
+        // menu-bar clicks at rest.
+        panel.ignoresMouseEvents = false
+        view.setMode(.notes)
+        view.layoutPill(.expanded, animated: true)
+    }
+
+    func collapse() {
+        guard let panel, let view, expanded else { return }
+        expanded = false
+        panel.ignoresMouseEvents = true
+        view.layoutPill(hovering ? .peek : .closed, animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Island.shrinkDuration + 0.1) { [weak self] in
+            guard let self, !self.recording, let v = self.view, v.state != .open else { return }
+            v.setMode(.dictate)
+        }
+    }
+
+    func setNotes(json: String) {
+        guard let (_, view) = ensurePanel() else { return }
+        view.notesModel.load(json: json)
     }
 
     /// True only on displays with a camera housing; callers fall back to the
@@ -1209,8 +1304,10 @@ private final class IslandController {
         guard let (_, view) = ensurePanel() else { return }
         pendingPeek?.cancel()
         pendingUnpeek?.cancel()
-        pendingHoverOpen?.cancel()
-        hoverOpened = false
+        if expanded {
+            expanded = false
+            panel?.ignoresMouseEvents = true
+        }
         guard !recording else { return }
         recording = true
         if view.mode.isRecording { view.startRecording() }
@@ -1310,12 +1407,21 @@ public func notch_overlay_set_clock(_ enabled: Int32) {
     DispatchQueue.main.async { IslandController.shared.setClock(enabled != 0) }
 }
 
-/// Latest note for the long-hover preview; NULL body clears it.
-@_cdecl("notch_overlay_set_latest_note")
-public func notch_overlay_set_latest_note(_ body: UnsafePointer<CChar>?, _ when: UnsafePointer<CChar>?) {
-    let b = body.map { String(cString: $0) }
-    let w = when.map { String(cString: $0) }
-    DispatchQueue.main.async { IslandController.shared.setLatestNote(body: b, when: w) }
+/// The current notes as JSON: [{"id":1,"body":"…","done":false,"when":"5m ago"}].
+@_cdecl("notch_overlay_set_notes")
+public func notch_overlay_set_notes(_ json: UnsafePointer<CChar>?) {
+    let s = json.map { String(cString: $0) } ?? "[]"
+    DispatchQueue.main.async { IslandController.shared.setNotes(json: s) }
+}
+
+/// Rust registers a callback for actions taken in the list:
+/// action 1 = toggle done, 2 = archive.
+public typealias NoteActionCallback = @convention(c) (Int32, Int64) -> Void
+nonisolated(unsafe) var noteActionCallback: NoteActionCallback?
+
+@_cdecl("notch_overlay_set_note_callback")
+public func notch_overlay_set_note_callback(_ cb: NoteActionCallback?) {
+    noteActionCallback = cb
 }
 
 /// Show an outcome briefly, then close. 0 = failed, 1 = done, 2 = noted.
@@ -1338,4 +1444,90 @@ public func notch_overlay_hide() {
 @_cdecl("notch_overlay_set_level")
 public func notch_overlay_set_level(_ level: Float) {
     DispatchQueue.main.async { IslandController.shared.setLevel(CGFloat(level)) }
+}
+
+
+// MARK: - Notes list (SwiftUI)
+
+struct NoteItem: Identifiable, Decodable, Equatable {
+    let id: Int64
+    var body: String
+    var done: Bool
+    var when: String
+}
+
+final class NotesModel: ObservableObject {
+    @Published var items: [NoteItem] = []
+    func load(json: String) {
+        if let data = json.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode([NoteItem].self, from: data) {
+            items = decoded
+        }
+    }
+    func toggle(_ n: NoteItem) {
+        if let i = items.firstIndex(of: n) { items[i].done.toggle() }
+        noteActionCallback?(1, n.id)
+    }
+    func archive(_ n: NoteItem) {
+        items.removeAll { $0.id == n.id }
+        noteActionCallback?(2, n.id)
+    }
+}
+
+/// Dark, sparse list to sit inside the black island. Swipe left to archive,
+/// swipe right (or click the circle) to check off.
+@available(macOS 14.0, *)
+struct NotesListView: View {
+    @ObservedObject var model: NotesModel
+
+    var body: some View {
+        Group {
+            if model.items.isEmpty {
+                VStack(spacing: 6) {
+                    Text("No notes yet").font(.system(size: 13, weight: .semibold))
+                    Text("Hold your dictation key and say “note down…”")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(model.items) { n in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Button { model.toggle(n) } label: {
+                                Image(systemName: n.done ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(n.done ? Color.green : Color.white.opacity(0.5))
+                                    .font(.system(size: 15))
+                            }
+                            .buttonStyle(.plain)
+                            Text(n.body)
+                                .font(.system(size: 13))
+                                .strikethrough(n.done, color: .white.opacity(0.5))
+                                .foregroundStyle(n.done ? Color.white.opacity(0.45) : Color.white)
+                                .lineLimit(2)
+                            Spacer(minLength: 6)
+                            Text(n.when).font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 3)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparatorTint(Color.white.opacity(0.08))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) { model.archive(n) } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }.tint(.gray)
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button { model.toggle(n) } label: {
+                                Label(n.done ? "Undo" : "Done", systemImage: n.done ? "arrow.uturn.backward" : "checkmark")
+                            }.tint(.green)
+                        }
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+            }
+        }
+        .foregroundStyle(.white)
+        .background(Color.clear)
+        .preferredColorScheme(.dark)
+    }
 }

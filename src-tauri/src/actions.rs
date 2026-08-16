@@ -124,7 +124,7 @@ fn should_use_streaming_overlay(style: OverlayStyle, is_streaming: bool) -> bool
 /// `prompt_override` bypasses the user's selected prompt. Refine-on-selection
 /// uses it to supply an instruction the user just spoke, which is per-invocation
 /// and so cannot live in the settings prompt library.
-async fn post_process_transcription(
+pub(crate) async fn post_process_transcription(
     settings: &AppSettings,
     transcription: &str,
     prompt_override: Option<String>,
@@ -1011,7 +1011,7 @@ impl ShortcutAction for TranscribeAction {
                                 utils::hide_recording_overlay(&ah);
                                 change_tray_icon(&ah, TrayIconState::Idle);
                             } else if let Some(note) =
-                                crate::notes::maybe_capture_note(&ah, &processed.final_text)
+                                crate::notes::maybe_capture_note(&ah, &processed.final_text).await
                             {
                                 // A note is kept, not typed: stored, left on the
                                 // clipboard, and the island says so.
