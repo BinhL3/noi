@@ -27,4 +27,4 @@ bun run tauri dev
 
 ## Credits
 
-[Handy](https://github.com/cjpais/Handy) by CJ Pais and contributors (MIT) is the foundation. [Talkify](https://github.com/tornikegomareli/Talkify) by Tornike Gomareli showed how fast Apple's on-device recogniser is. Design notes and roadmap: [PLAN.md](PLAN.md), [docs/](docs/). MIT — see [LICENSE](LICENSE).
+[Handy](https://github.com/cjpais/Handy) by CJ Pais and contributors (MIT) is the foundation. [Talkify](https://github.com/tornikegomareli/Talkify) by Tornike Gomareli showed how fast Apple's on-device recogniser is. MIT — see [LICENSE](LICENSE).

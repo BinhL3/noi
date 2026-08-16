@@ -1,15 +1,6 @@
-// Native notch overlay.
-//
-// The webview overlay could not match Alcove's smoothness, and the reason is
-// structural rather than a matter of tuning: in a webview the pill is DOM, so
-// every frame of a size change costs layout and paint. Here the pill is a
-// CALayer and the system animates it on the GPU with CASpringAnimation — real
-// spring physics, no layout, nothing for the CPU to recompute per frame.
-//
-// Rust owns when the overlay appears and what it says; this file owns how it
-// looks and moves. The C entry points at the bottom are the whole interface,
-// and every one of them hops to the main thread because AppKit demands it and
-// Rust calls them from the shortcut and transcription threads.
+// Native notch overlay: a CALayer island driven by CASpringAnimation.
+// Rust decides when it shows and what it says (C entry points at the bottom,
+// all hopping to the main thread); this file decides how it looks and moves.
 
 import AppKit
 import QuartzCore
@@ -24,10 +15,7 @@ enum IslandState {
     case closed, peek, open
 }
 
-/// What the open island is FOR. The shape is the same; the content and tint
-/// say which. Dictation is Voice Memos red; an instruction is violet — the
-/// system's colour for "intelligence" — so the user can tell at a glance that
-/// what they say next is a command, not text.
+/// What the open island is showing. Same shape; content and tint differ.
 enum IslandMode: Equatable {
     case dictate
     case instruct
@@ -44,27 +32,20 @@ enum IslandMode: Equatable {
     var isRecording: Bool { self == .dictate || self == .instruct }
 }
 
-/// Numbers come from docs/research/notch-ui-design.md §5: they are what
-/// boring.notch and DynamicNotchKit ship, checked against Apple's HIG.
+/// Numbers follow boring.notch / DynamicNotchKit, checked against the HIG.
 private enum Island {
     /// Chin below the housing, per state. Closed is exactly the housing so
     /// the pill is invisible at rest.
     static func chinHeight(_ s: IslandState) -> CGFloat {
         switch s { case .closed: 0; case .peek: 8; case .open: 62 }
     }
-    /// How far the body extends past the cutout on each side. Closed carries
-    /// a hair of slop so the anti-aliased seam where bezel meets pixels never
-    /// shows a light gap; open grows well outward so the island reads as
-    /// pushing out from behind the housing rather than merely dropping down.
+    /// Extension past the cutout per side. Closed keeps 2pt of slop so the
+    /// bezel seam never shows a light gap.
     static func overhang(_ s: IslandState) -> CGFloat {
         switch s { case .closed: 2; case .peek: 10; case .open: 58 }
     }
-    /// The concave fillet where the island meets the top screen edge. This is
-    /// what makes it the Dynamic Island shape rather than a pill: the top
-    /// corners curve OUTWARD into the edge, like a trumpet bell, so the island
-    /// appears to grow out of the surface instead of being stuck onto it.
-    /// Both radii grow with the island — a constant radius makes the closed
-    /// state look puffy and the open state look boxy.
+    /// Concave fillet where the island meets the screen edge — what makes it
+    /// an island rather than a pill. Both radii scale with the state.
     static func flare(_ s: IslandState) -> CGFloat {
         switch s { case .closed: 6; case .peek: 10; case .open: 22 }
     }
@@ -122,17 +103,9 @@ private func springAnimation(keyPath: String, duration: CFTimeInterval, bounce: 
     return spring
 }
 
-/// The island outline in layer coordinates (y-up, top edge at maxY).
-///
-/// Top corners are concave quadratic fillets flaring outward to the top edge;
-/// bottom corners are ordinary convex rounds. The body is inset by `flare` on
-/// each side so the flares stay inside the frame.
-/// Coordinates are CENTRED: x runs from -w/2 to w/2, y from 0 (bottom) to h
-/// (top). Every layer in the island uses this frame, anchored at top-centre,
-/// so nothing's position depends on the current width — the pill's centre is
-/// fixed and its bounds grow symmetrically about it. When positions were
-/// measured from the pill's left edge, any two springs that were not
-/// bit-identical showed as a horizontal slide mid-animation.
+/// The island outline, centred: x in -w/2...w/2, y in 0 (bottom)...h (top).
+/// Every layer uses this frame anchored at top-centre, so no position depends
+/// on the current width and nothing can drift while the bounds spring.
 private func islandPath(size: CGSize, cornerRadius r: CGFloat, flare f: CGFloat, closed: Bool = true) -> CGPath {
     let raw = islandPathLeftOrigin(size: size, cornerRadius: r, flare: f, closed: closed)
     var shift = CGAffineTransform(translationX: -size.width / 2, y: 0)
@@ -188,12 +161,9 @@ private final class IslandView: NSView {
     /// Everything in the chin. Fades and scales in from the top edge as one
     /// unit, so content is revealed by the island opening rather than popping.
     private let content = CALayer()
-    /// The voice: a Siri-style layered wave — three translucent sine
-    /// composites that re-roll toward fresh random shapes as the level
-    /// changes (after alfianlosari/SiriWaveView, via Talkify), drawn in the
-    /// brand blues. It is the logo, live. Each layer is a CAShapeLayer whose
-    /// path is rebuilt on a 30 Hz tick with a fixed point count, so the
-    /// implicit path animation morphs it smoothly between ticks.
+    /// Siri-style layered wave (after alfianlosari/SiriWaveView): three
+    /// translucent sine composites, paths rebuilt on a 30 Hz tick with a
+    /// fixed point count so they morph.
     private var waveLayers: [CAShapeLayer] = []
     private var waveShapes: [SiriWave] = []
     private var waveTargets: [SiriWave] = []
@@ -297,20 +267,12 @@ private final class IslandView: NSView {
         wantsLayer = true
         layer?.masksToBounds = false
 
-        // Black, so it fuses with the physically black housing. Any other
-        // colour reads as a separate object sitting under the notch. The shape
-        // comes entirely from the path (concave top flares), so no cornerRadius
-        // and no masksToBounds — a rect clip would slice the flares off.
+        // Pure black to fuse with the housing; shape comes from the path.
         pill.fillColor = NSColor.black.cgColor
         pill.backgroundColor = NSColor.clear.cgColor
 
-        // What sells "physical object" on Apple's own islands is not the shape
-        // but the light: a soft drop shadow below (the pill floats above the
-        // wallpaper) and a hairline rim catching light along the bottom edge.
-        // The shadow lives on a dedicated layer UNDER the pill, because the
-        // pill clips its contents and would clip its own shadow too.
-        // Only when open: at rest the island must read as hardware, and
-        // hardware does not cast a shadow onto the wallpaper.
+        // Shadow on its own layer under the pill (the pill masks its own
+        // contents), and only when open — at rest it must read as hardware.
         shadowLayer.backgroundColor = NSColor.clear.cgColor
         shadowLayer.shadowColor = NSColor.black.cgColor
         shadowLayer.shadowOpacity = 0
@@ -318,11 +280,8 @@ private final class IslandView: NSView {
         shadowLayer.shadowOffset = CGSize(width: 0, height: -5) // downward, y-up space
         layer?.addSublayer(shadowLayer)
 
-        // The pill and its shadow hang from the top-centre of the view. Inside
-        // the pill, local y = 0 is the bottom edge and y = h the top; the mask
-        // and rim are anchored at bottom-centre, position (0, 0), so their
-        // bounds (0...h) coincide with the pill's at every height with no
-        // position to animate. See islandPath.
+        // Pill and shadow hang from the view's top-centre; mask and rim are
+        // anchored bottom-centre at (0, 0) so their bounds track the pill's.
         for l in [pill, shadowLayer] as [CALayer] {
             l.anchorPoint = CGPoint(x: 0.5, y: 1)
         }
@@ -551,16 +510,9 @@ private final class IslandView: NSView {
 
         rim.opacity = s == .closed ? 0 : 1
 
-        // The chin, as a layer anchored to the housing's bottom edge. When
-        // closed the chin has no height, so we keep the open size and let
-        // opacity + scale do the hiding — a zero-size layer would make the
-        // reveal a snap instead of a morph.
-        // Always the OPEN chin's geometry, whatever state we are entering:
-        // content is only ever visible when open, and re-laying it out for a
-        // smaller pill made the wave slide down-left as it faded. Its top edge
-        // sits at the open chin height in pill coordinates; when the pill is
-        // shorter than that the content is above the pill and the mask hides
-        // it. x = 0 is the pill's centre line, always.
+        // Content always keeps the open chin's geometry (top edge at the open
+        // chin height, x = 0 the centre line); opacity/scale/blur do the
+        // hiding and the mask clips it when the pill is shorter.
         let chinSize = CGSize(width: pillFrame(.open).width, height: Island.chinHeight(.open))
         content.bounds = CGRect(origin: .zero, size: chinSize)
         content.position = CGPoint(x: 0, y: Island.chinHeight(.open))
@@ -620,11 +572,8 @@ private final class IslandView: NSView {
         layoutCluster(in: chinSize)
     }
 
-    /// One centred cluster, whose members depend on the mode:
-    ///   dictate:  (■) · wave · 0:07          red
-    ///   instruct:  ✦  · wave · 0:07          violet
-    ///   working:   ✦  · "Refining…"          breathing
-    ///   done:      ✓  · "Done"               green, then close
+    /// One centred cluster per mode: dictate = wave (+ clock after 8 s);
+    /// instruct = wave · hint; armed/working = ✦ · text; done = ✓ · Done.
     private func layoutCluster(in chinSize: CGSize) {
         let gap = Self.clusterGap
         let midY = chinSize.height / 2
@@ -857,11 +806,7 @@ private final class IslandView: NSView {
         return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
     }
 
-    /// Switch what the open island shows. Content cross-fades within the same
-    /// shape; the shape itself does not move.
-    /// How long the wave takes to settle on release before the next mode is
-    /// revealed. This is the "event" of stopping: without it the wave simply
-    /// evaporated and the release felt like nothing happened.
+    /// How long the wave settles on release before the next mode is revealed.
     private static let releaseSettle: CFTimeInterval = 0.34
     private var modeGeneration = 0
     /// The armed hint has to be readable: the gesture resolves at the tap
@@ -1090,11 +1035,8 @@ private struct SiriWave {
 
 // MARK: - Panel
 
-/// Housing height and cutout width, or nil when this screen has no notch.
-///
-/// The APIs are macOS 12+, while the bridge targets 11.0 to match the rest of
-/// the Swift build. No notched Mac ever shipped below 12, so an older system
-/// simply reports "no notch" and the caller uses the webview overlay.
+/// Housing height and cutout width, or nil when this screen has no notch
+/// (or the OS predates the safe-area APIs).
 private func notchMetrics(of screen: NSScreen) -> (safeAreaTop: CGFloat, cutoutWidth: CGFloat)? {
     guard #available(macOS 12.0, *) else { return nil }
     let safeAreaTop = screen.safeAreaInsets.top

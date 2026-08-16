@@ -844,10 +844,7 @@ pub fn run(cli_args: CliArgs) {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
-            // This fork has been rebranded (Handy → Notch Scribe → Noi), and
-            // each bundle id has its own app-data directory. Carry settings,
-            // history and downloaded models across once, by renaming the
-            // newest old directory into place — instant, nothing to copy.
+            // Carry app data over from a previous bundle id, once.
             migrate_legacy_app_data(app.handle());
 
             // Snapshot notch geometry while we are still on the main thread —
@@ -970,10 +967,7 @@ pub fn run(cli_args: CliArgs) {
                 settings.overlay_style != settings::OverlayStyle::None,
             );
 
-            // The app should know its owner's name without being told: seed
-            // the account's full name into custom words once, so "Binley"
-            // comes out as "Binh Le" from the first dictation. The onboarding
-            // introduce-yourself step refines this; this is the floor.
+            // Seed the account's full name into custom words once.
             #[cfg(target_os = "macos")]
             seed_owner_name(app.handle());
 

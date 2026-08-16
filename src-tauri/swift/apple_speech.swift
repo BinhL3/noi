@@ -1,14 +1,6 @@
-// Apple's on-device speech recognition as a Noi engine.
-//
-// macOS 26 ships SpeechAnalyzer / SpeechTranscriber: Apple's own dictation
-// model, running on the Neural Engine, no download, no network. It is the
-// engine Talkify (github.com/tornikegomareli/Talkify) is built on, and it is
-// fast. Here it is one more entry in the model list; the pipeline hands it
-// the same 16 kHz mono float samples every other engine gets.
-//
-// The Rust side calls from a blocking worker thread. Swift's API is async, so
-// each call runs a Task and waits on a semaphore — simple, and correct for a
-// batch transcribe.
+// Apple's on-device SpeechAnalyzer (macOS 26) as an engine. Batch: Rust
+// hands over the recording's samples from a blocking thread; each call runs
+// a Task and waits on a semaphore.
 
 import AVFoundation
 import Foundation

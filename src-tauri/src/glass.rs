@@ -1,14 +1,6 @@
-//! Liquid Glass backdrop for the settings window (macOS).
-//!
-//! The window is created transparent with an overlay title bar, and a
-//! system glass view is slid in BEHIND the webview so the desktop refracts
-//! through the whole window the way it does through Apple's own Tahoe
-//! panels. The web content then only needs translucent surfaces; it never
-//! fakes the glass itself.
-//!
-//! macOS 26 has the real thing, `NSGlassEffectView`. Earlier systems get an
-//! `NSVisualEffectView` in the sidebar material, which is the same idea with
-//! last year's optics. Both are pure AppKit and cost nothing per frame.
+//! Liquid Glass backdrop for the settings window: a system glass view slid
+//! in behind the webview of a transparent window. NSGlassEffectView on
+//! macOS 26, NSVisualEffectView before.
 
 use log::{debug, warn};
 use objc2::rc::Retained;

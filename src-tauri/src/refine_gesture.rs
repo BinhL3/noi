@@ -1,24 +1,10 @@
-//! Gesture grammar for the refine-on-selection key.
+//! Gesture grammar for the refine key:
 //!
-//! - tap                      → refine the selection now, no recording
-//! - tap, then press-and-hold → record an instruction while held;
-//!                              release → stop and apply it
-//! - double-tap               → record an instruction until the next tap
-//!                              (the second press released quickly means
-//!                              "keep listening"); that tap applies it
+//! - tap                      → refine the selection, no recording
+//! - tap, then press-and-hold → record an instruction; release applies
+//! - double-tap               → record until the next tap; that tap applies
 //!
-//! Users describe the second gesture as "double tap", so both grammars
-//! work and mean the same thing. Cancel is Handy's cancel binding (Escape).
-//!
-//! A tap is only known to be a lone tap once the double-tap window has passed
-//! with no second press, so refine runs `TAP_WINDOW` late — invisible next to
-//! the LLM call. A second press inside the window starts recording at once,
-//! and its release ends it. A quick double tap therefore records ~nothing,
-//! which the pipeline treats as a silent refine — the same result as one tap.
-//!
-//! State is a press timestamp, a "holding" flag, and a generation counter:
-//! each press bumps the generation, and the deferred refine only fires if the
-//! generation it captured is still current when its window closes.
+//! Single-tap actions run once the tap window closes. Cancel is Escape.
 
 use log::{debug, warn};
 use once_cell::sync::Lazy;
