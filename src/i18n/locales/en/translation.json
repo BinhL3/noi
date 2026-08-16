@@ -697,6 +697,19 @@
     "hideHistory": "Hide transcripts",
     "advanced": "Advanced settings ›",
     "backToSimple": "‹ Simple settings",
-    "manageModels": "Download or manage speech models ›"
+    "manageModels": "Download or manage speech models ›",
+    "notes": "Notes"
+  },
+  "notes": {
+    "toggle": {
+      "label": "Notes by voice",
+      "description": "Start a dictation with “note”, “note to self” or “remember” and it is kept here instead of typed. It is also put on your clipboard."
+    },
+    "empty": "Nothing yet. Hold your dictation key and say “note down…”.",
+    "deleted": "Note deleted.",
+    "undo": "Undo",
+    "copy": "Copy",
+    "copied": "Copied",
+    "delete": "Delete"
   }
 }

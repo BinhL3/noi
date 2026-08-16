@@ -15,6 +15,7 @@ import { PostProcessingSettingsApi } from "../post-processing/PostProcessingSett
 import { HistoryLimit } from "../HistoryLimit";
 import { RecordingRetentionPeriodSelector } from "../RecordingRetentionPeriod";
 import { HistorySettings } from "../history/HistorySettings";
+import { NotesSection } from "../notes/NotesSection";
 import { useSettings } from "../../../hooks/useSettings";
 
 /**
@@ -62,6 +63,10 @@ export const SimpleSettings: React.FC<{
       <SimpleSection title={t("simple.refine")}>
         <PostProcessingToggle descriptionMode="tooltip" grouped={true} />
         {refineOn && <PostProcessingSettingsApi />}
+      </SimpleSection>
+
+      <SimpleSection title={t("simple.notes")}>
+        <NotesSection />
       </SimpleSection>
 
       <SimpleSection title={t("simple.history")}>

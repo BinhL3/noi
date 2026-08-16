@@ -433,6 +433,10 @@ pub struct AppSettings {
     /// long (macOS notch overlay). On by default.
     #[serde(default = "default_overlay_clock")]
     pub overlay_clock: bool,
+    /// A dictation that starts with "note" / "note to self" / "remember" is
+    /// kept as a note instead of typed. On by default.
+    #[serde(default = "default_notes_enabled")]
+    pub notes_enabled: bool,
     #[serde(default)]
     pub append_trailing_space: bool,
     #[serde(default = "default_app_language")]
@@ -491,6 +495,10 @@ const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 1;
 
 fn default_settings_schema_version() -> u32 {
     CURRENT_SETTINGS_SCHEMA_VERSION
+}
+
+fn default_notes_enabled() -> bool {
+    true
 }
 
 fn default_overlay_clock() -> bool {
@@ -962,6 +970,7 @@ pub fn get_default_settings() -> AppSettings {
         post_process_selected_prompt_id: None,
         mute_while_recording: false,
         overlay_clock: true,
+        notes_enabled: true,
         append_trailing_space: false,
         app_language: default_app_language(),
         theme: default_theme(),

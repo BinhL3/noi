@@ -1010,6 +1010,14 @@ impl ShortcutAction for TranscribeAction {
                             if processed.final_text.is_empty() {
                                 utils::hide_recording_overlay(&ah);
                                 change_tray_icon(&ah, TrayIconState::Idle);
+                            } else if let Some(note) =
+                                crate::notes::maybe_capture_note(&ah, &processed.final_text)
+                            {
+                                // A note is kept, not typed: stored, left on the
+                                // clipboard, and the island says so.
+                                debug!("Captured note #{}", note.id);
+                                crate::notes::acknowledge(&ah);
+                                change_tray_icon(&ah, TrayIconState::Idle);
                             } else {
                                 let ah_clone = ah.clone();
                                 let paste_time = Instant::now();

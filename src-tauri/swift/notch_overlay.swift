@@ -27,7 +27,12 @@ enum IslandMode: Equatable {
     /// shows lines of text (speech becoming text — not a waveform, which now
     /// means recording), refining the sparkle.
     case working(String, symbol: String)
-    case done(ok: Bool)
+    /// Outcome shown for a beat before closing. `label` is what it says
+    /// ("Done", "Noted", "Couldn't do that").
+    case done(ok: Bool, label: String)
+
+    var isDone: Bool { if case .done = self { return true }; return false }
+    var isSuccess: Bool { if case .done(let ok, _) = self { return ok }; return false }
 
     var isRecording: Bool { self == .dictate || self == .instruct }
 }
@@ -586,7 +591,7 @@ private final class IslandView: NSView {
         case .instruct: tint = Tint.instruct
         case .armed: tint = Tint.instruct
         case .working: tint = Tint.instruct
-        case .done(let ok): tint = ok ? Tint.ok : Tint.fail
+        case .done(let ok, _): tint = ok ? Tint.ok : Tint.fail
         }
         let palette = mode == .instruct ? WavePalette.instruct : WavePalette.dictate
         for (i, wave) in waveLayers.enumerated() { wave.fillColor = palette[i].cgColor }
@@ -597,7 +602,7 @@ private final class IslandView: NSView {
         // Which members are present.
         // Recording modes are the wave and the clock, nothing else: the wave
         // is the recording indicator. Glyphs belong to working/done.
-        let isCheck = mode == .done(ok: true)
+        let isCheck = mode.isDone && mode.isSuccess
         symbol.isHidden = recording || isCheck
         checkDisc.isHidden = !isCheck
         checkStroke.isHidden = !isCheck
@@ -617,7 +622,7 @@ private final class IslandView: NSView {
         case .instruct: symbolName = "sparkles"; text = "Describe your change"; sub = "tap again, or release, to apply"
         case .armed: symbolName = "sparkles"; text = "Refine"; sub = "double-tap to describe a change instead"
         case .working(let s, let sym): symbolName = sym; text = s
-        case .done(let ok): symbolName = ok ? "" : "xmark.circle.fill"; text = ok ? "Done" : "Couldn't do that"
+        case .done(let ok, let label): symbolName = ok ? "" : "xmark.circle.fill"; text = label
         }
         if !symbolName.isEmpty {
             symbol.contents = symbolImage(symbolName, size: Glyph.symbolSize, color: tint)
@@ -1193,15 +1198,15 @@ private final class IslandController {
 
     /// Show the outcome for a beat, then close. Opens first if needed, so a
     /// tap-refine that never recorded still gets its "Done".
-    func finish(ok: Bool) {
+    func finish(ok: Bool, label: String) {
         guard let (_, view) = ensurePanel() else { return }
         // "Done" may be held back until the armed hint has been readable;
         // the close waits the same amount, then a second on top.
         let wait = view.remainingArmedDwell() + 1.0
-        view.setMode(.done(ok: ok))
+        view.setMode(.done(ok: ok, label: label))
         show()
         DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
-            guard let self, self.view?.mode == .done(ok: ok) else { return }
+            guard let self, self.view?.mode.isDone == true else { return }
             self.hide()
         }
     }
@@ -1274,10 +1279,16 @@ public func notch_overlay_set_clock(_ enabled: Int32) {
     DispatchQueue.main.async { IslandController.shared.setClock(enabled != 0) }
 }
 
-/// Show ✓ Done (or ✗) briefly, then close.
+/// Show an outcome briefly, then close. 0 = failed, 1 = done, 2 = noted.
 @_cdecl("notch_overlay_finish")
-public func notch_overlay_finish(_ ok: Int32) {
-    DispatchQueue.main.async { IslandController.shared.finish(ok: ok != 0) }
+public func notch_overlay_finish(_ outcome: Int32) {
+    let (ok, label): (Bool, String)
+    switch outcome {
+    case 2: (ok, label) = (true, "Noted")
+    case 1: (ok, label) = (true, "Done")
+    default: (ok, label) = (false, "Couldn't do that")
+    }
+    DispatchQueue.main.async { IslandController.shared.finish(ok: ok, label: label) }
 }
 
 @_cdecl("notch_overlay_hide")

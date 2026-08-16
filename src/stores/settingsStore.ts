@@ -153,6 +153,8 @@ const settingUpdaters: {
     commands.changeMuteWhileRecordingSetting(value as boolean),
   overlay_clock: (value) =>
     commands.changeOverlayClockSetting(value as boolean),
+  notes_enabled: (value) =>
+    commands.changeNotesEnabledSetting(value as boolean),
   append_trailing_space: (value) =>
     commands.changeAppendTrailingSpaceSetting(value as boolean),
   log_level: (value) => commands.setLogLevel(value as any),

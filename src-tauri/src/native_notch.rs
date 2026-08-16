@@ -18,7 +18,7 @@ unsafe extern "C" {
     fn notch_overlay_show();
     fn notch_overlay_hide();
     fn notch_overlay_set_mode(mode: i32);
-    fn notch_overlay_finish(ok: i32);
+    fn notch_overlay_finish(outcome: i32);
     fn notch_overlay_set_clock(enabled: i32);
     fn notch_overlay_set_level(level: f32);
 }
@@ -77,13 +77,26 @@ pub fn set_mode(mode: Mode) {
     unsafe { notch_overlay_set_mode(mode as i32) }
 }
 
-/// Show the outcome (✓ / ✗) for a beat, then close. Replaces `hide()` at the
-/// end of an operation the user should see the result of.
+/// What the island shows for a beat before closing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum Outcome {
+    Failed = 0,
+    Done = 1,
+    Noted = 2,
+}
+
+/// Show the outcome for a beat, then close. Replaces `hide()` at the end of
+/// an operation the user should see the result of.
 pub fn finish(ok: bool) {
+    finish_with(if ok { Outcome::Done } else { Outcome::Failed })
+}
+
+pub fn finish_with(outcome: Outcome) {
     if !is_available() {
         return;
     }
-    unsafe { notch_overlay_finish(ok as i32) }
+    unsafe { notch_overlay_finish(outcome as i32) }
 }
 
 /// Whether the island shows its small clock once a dictation runs long.

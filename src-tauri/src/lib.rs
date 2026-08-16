@@ -21,6 +21,7 @@ mod memory;
 mod native_notch;
 #[cfg(target_os = "macos")]
 mod notch;
+mod notes;
 mod overlay;
 mod paste_tx;
 pub mod portable;
@@ -192,6 +193,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(model_manager.clone());
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
+    let note_store =
+        Arc::new(notes::NoteStore::new(app_handle).expect("Failed to initialize note store"));
+    app_handle.manage(note_store);
     app_handle.manage(tray::CurrentTrayIconState::new());
 
     // Note: Shortcuts are NOT initialized here.
@@ -656,6 +660,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::resume_all_bindings,
             shortcut::change_mute_while_recording_setting,
             shortcut::change_overlay_clock_setting,
+            shortcut::change_notes_enabled_setting,
             shortcut::change_append_trailing_space_setting,
             shortcut::change_lazy_stream_close_setting,
             shortcut::change_vad_enabled_setting,
@@ -720,6 +725,9 @@ pub fn run(cli_args: CliArgs) {
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,
             commands::transcription::unload_model_manually,
+            commands::notes::list_notes,
+            commands::notes::delete_note,
+            commands::notes::restore_note,
             commands::history::get_history_entries,
             commands::history::toggle_history_entry_saved,
             commands::history::get_audio_file_path,
